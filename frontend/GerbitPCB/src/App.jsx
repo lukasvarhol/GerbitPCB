@@ -86,7 +86,7 @@ export default function App() {
 });
 
   const total = summaryLines.reduce((acc, l) => acc + l.price, 0);
-  const cartCount = summaryLines.length;
+    const cartCount = summaryLines.length;
 
     const handleOrder = async () => {
 	const token = await getAccessTokenSilently();
