@@ -3,6 +3,7 @@ import { Button, Card, Col, Row, Typography, Badge, Divider, Switch, InputNumber
 import { ShoppingCartOutlined } from '@ant-design/icons';
 import 'antd/dist/reset.css';
 import ComponentList from './components/ComponentList';
+import { useAuth0 } from '@auth0/auth0-react';
 
 const { Title, Text } = Typography;
 
@@ -62,6 +63,9 @@ function SpecSelector({ options, selected, onSelect }) {
 }
 
 export default function App() {
+
+    const { isAuthenticated, loginWithRedirect, logout, user, getAccessTokenSilently } = useAuth0();
+    
   const [selectedSize,  setSelectedSize]  = useState(null);
   const [selectedLayer, setSelectedLayer] = useState(null);
   const [selectedQty,   setSelectedQty]   = useState(null);
@@ -84,18 +88,28 @@ export default function App() {
   const total = summaryLines.reduce((acc, l) => acc + l.price, 0);
   const cartCount = summaryLines.length;
 
-  const handleOrder = () => {
-    const payload = {
-      size:         selectedSize  !== null ? PCB_SIZES[selectedSize].label   : null,
-      layers:       selectedLayer !== null ? PCB_LAYERS[selectedLayer].label  : null,
-      quantity:     selectedQty   !== null ? PCB_QUANTITIES[selectedQty].label : null,
-      pickAndPlace,
-      components: selectedComponents.map(c => ({
-	  id: c.id,
-	  name: c.name,
-	  qty: c.qty,
-      })),
-    };
+    const handleOrder = async () => {
+	const token = await getAccessTokenSilently();
+	const payload = {
+	    size:         selectedSize  !== null ? PCB_SIZES[selectedSize].label   : null,
+	    layers:       selectedLayer !== null ? PCB_LAYERS[selectedLayer].label  : null,
+	    quantity:     selectedQty   !== null ? PCB_QUANTITIES[selectedQty].label : null,
+	    pickAndPlace,
+	    components: selectedComponents.map(c => ({
+		id: c.id,
+		name: c.name,
+		qty: c.qty,
+	    })),
+	};
+
+	fetch('/api/orders', {
+	    method: 'POST',
+	    headers: {
+		'Content-Type': 'application/json',
+		Authorization: `Bearer ${token}`,
+	    },
+	    body: JSON.stringify(payload),
+	});
 
     // TODO: replace with real API call
     // fetch('/api/orders', {
@@ -113,11 +127,25 @@ export default function App() {
       {/* Header */}
       <Card style={{ marginBottom: 24 }} styles={{ body: { padding: '12px 24px' } }}>
         <Row justify="space-between" align="middle">
-          <Title level={4} style={{ margin: 0 }}>GerbitPCB</Title>
-          <Badge count={cartCount} showZero>
-            <Button icon={<ShoppingCartOutlined />}>Cart</Button>
-          </Badge>
-        </Row>
+	    <Title level={4} style={{ margin: 0 }}>GerbitPCB</Title>
+	    <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+		{isAuthenticated ? (
+		    <>
+			<Text type="secondary" style={{ fontSize: 13 }}>{user.email}</Text>
+			<Button onClick={() => logout({ logoutParams: { returnTo: window.location.origin } })}>
+			    Log out
+			</Button>
+		    </>
+		) : (
+		    <Button type="primary" onClick={() => loginWithRedirect()}>
+			Log in
+		    </Button>
+		)}
+		<Badge count={cartCount} showZero>
+		    <Button icon={<ShoppingCartOutlined />}>Cart</Button>
+		</Badge>
+	    </div>
+	</Row>
       </Card>
 
       <Row gutter={24}>
