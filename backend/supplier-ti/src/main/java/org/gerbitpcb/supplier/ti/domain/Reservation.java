@@ -18,6 +18,14 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
 
+/**
+ * ENTITY: Database Model.
+ * 
+ * Represents an active or completed interaction with inventory.
+ * In a Two-Phase Commit system, this holds the state (RESERVED, COMMITTED, ROLLED_BACK) 
+ * so that Phase 2 (the final commit or rollback) knows exactly which component, 
+ * how much quantity we locked, and if it's still safe to complete the purchase.
+ */
 @Entity
 @Table(name = "reservations")
 @Getter
@@ -42,4 +50,3 @@ public class Reservation {
     @Column(nullable = false)
     private ReservationStatus status;
 }
-
