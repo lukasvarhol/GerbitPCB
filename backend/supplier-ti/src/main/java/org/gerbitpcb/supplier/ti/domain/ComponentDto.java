@@ -1,4 +1,4 @@
-package org.gerbitpcb.supplier.murata.domain;
+package org.gerbitpcb.supplier.ti.domain;
 
 import java.math.BigDecimal;
 import java.util.UUID;

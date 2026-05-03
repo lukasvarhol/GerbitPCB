@@ -1,10 +1,10 @@
-package org.gerbitpcb.supplier.murata.controllers;
+package org.gerbitpcb.supplier.ti.controllers;
 
-import org.gerbitpcb.supplier.murata.domain.ComponentDto;
-import org.gerbitpcb.supplier.murata.domain.ReservationRequest;
-import org.gerbitpcb.supplier.murata.domain.ReserveRequest;
-import org.gerbitpcb.supplier.murata.domain.ReserveResponse;
-import org.gerbitpcb.supplier.murata.services.ComponentService;
+import org.gerbitpcb.supplier.ti.domain.ComponentDto;
+import org.gerbitpcb.supplier.ti.domain.ReservationRequest;
+import org.gerbitpcb.supplier.ti.domain.ReserveRequest;
+import org.gerbitpcb.supplier.ti.domain.ReserveResponse;
+import org.gerbitpcb.supplier.ti.services.ComponentService;
 import java.util.List;
 import java.util.UUID;
 import org.springframework.http.ResponseEntity;

@@ -1,4 +1,4 @@
-package org.gerbitpcb.supplier.murata;
+package org.gerbitpcb.supplier.ti;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;

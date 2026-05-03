@@ -1,12 +1,12 @@
-package org.gerbitpcb.supplier.murata.services;
+package org.gerbitpcb.supplier.ti.services;
 
-import org.gerbitpcb.supplier.murata.domain.Component;
-import org.gerbitpcb.supplier.murata.domain.ComponentDto;
-import org.gerbitpcb.supplier.murata.domain.Reservation;
-import org.gerbitpcb.supplier.murata.domain.ReservationStatus;
-import org.gerbitpcb.supplier.murata.exceptions.OutOfStockException;
-import org.gerbitpcb.supplier.murata.repository.ComponentRepository;
-import org.gerbitpcb.supplier.murata.repository.ReservationRepository;
+import org.gerbitpcb.supplier.ti.domain.Component;
+import org.gerbitpcb.supplier.ti.domain.ComponentDto;
+import org.gerbitpcb.supplier.ti.domain.Reservation;
+import org.gerbitpcb.supplier.ti.domain.ReservationStatus;
+import org.gerbitpcb.supplier.ti.exceptions.OutOfStockException;
+import org.gerbitpcb.supplier.ti.repository.ComponentRepository;
+import org.gerbitpcb.supplier.ti.repository.ReservationRepository;
 import java.util.List;
 import java.util.UUID;
 import org.springframework.http.HttpStatus;

@@ -1,6 +1,6 @@
-package org.gerbitpcb.supplier.murata.repository;
+package org.gerbitpcb.supplier.ti.repository;
 
-import org.gerbitpcb.supplier.murata.domain.Component;
+import org.gerbitpcb.supplier.ti.domain.Component;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.data.jpa.repository.JpaRepository;

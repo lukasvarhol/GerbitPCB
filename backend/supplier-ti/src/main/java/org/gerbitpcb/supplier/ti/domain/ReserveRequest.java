@@ -1,4 +1,4 @@
-package org.gerbitpcb.supplier.murata.domain;
+package org.gerbitpcb.supplier.ti.domain;
 
 /**
  * DTO (Data Transfer Object) for Phase 1: The Request.

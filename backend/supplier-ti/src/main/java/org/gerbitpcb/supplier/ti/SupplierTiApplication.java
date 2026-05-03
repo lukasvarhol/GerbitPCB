@@ -1,8 +1,8 @@
-package org.gerbitpcb.supplier.murata;
+package org.gerbitpcb.supplier.ti;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
-import org.gerbitpcb.supplier.murata.domain.Component;
-import org.gerbitpcb.supplier.murata.repository.ComponentRepository;
+import org.gerbitpcb.supplier.ti.domain.Component;
+import org.gerbitpcb.supplier.ti.repository.ComponentRepository;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.context.annotation.Bean;
 

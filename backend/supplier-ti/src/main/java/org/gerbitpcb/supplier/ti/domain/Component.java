@@ -1,4 +1,4 @@
-package org.gerbitpcb.supplier.murata.domain;
+package org.gerbitpcb.supplier.ti.domain;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;

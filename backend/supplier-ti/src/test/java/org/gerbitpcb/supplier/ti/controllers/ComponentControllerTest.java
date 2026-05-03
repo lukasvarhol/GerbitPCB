@@ -1,9 +1,10 @@
-package org.gerbitpcb.supplier.murata.controllers;
+package org.gerbitpcb.supplier.ti.controllers;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import org.gerbitpcb.supplier.murata.domain.ReservationRequest;
-import org.gerbitpcb.supplier.murata.domain.ReserveRequest;
-import org.gerbitpcb.supplier.murata.services.ComponentService;
+import org.gerbitpcb.supplier.ti.domain.ReservationRequest;
+import org.gerbitpcb.supplier.ti.domain.ReserveRequest;
+import org.gerbitpcb.supplier.ti.services.ComponentService;
+import org.gerbitpcb.supplier.ti.repository.ComponentRepository;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
@@ -35,7 +36,7 @@ class ComponentControllerTest {
     private ComponentService componentService;
 
     @MockitoBean
-    private org.gerbitpcb.supplier.murata.repository.ComponentRepository componentRepository;
+    private ComponentRepository componentRepository;
 
     @Test
     void testReserveEndpoint_Success() throws Exception {

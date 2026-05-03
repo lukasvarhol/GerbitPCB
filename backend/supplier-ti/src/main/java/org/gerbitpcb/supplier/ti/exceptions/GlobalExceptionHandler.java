@@ -1,4 +1,4 @@
-package org.gerbitpcb.supplier.murata.exceptions;
+package org.gerbitpcb.supplier.ti.exceptions;
 
 import jakarta.servlet.http.HttpServletRequest;
 import java.time.Instant;

@@ -1,4 +1,4 @@
-package org.gerbitpcb.supplier.murata.exceptions;
+package org.gerbitpcb.supplier.ti.exceptions;
 
 public class OutOfStockException extends RuntimeException {
     public OutOfStockException(String message) {
