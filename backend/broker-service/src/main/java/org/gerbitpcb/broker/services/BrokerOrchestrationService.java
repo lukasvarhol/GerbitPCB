@@ -88,7 +88,7 @@ public class BrokerOrchestrationService {
                     a.setFailureReason("NO_RESERVATION_ID");
                     txn.addAudit(a);
                     // rollback previously reserved
-                    rollbackReserved(reserved);
+                    rollbackReserved(reserved, txn, step);
                     txn.setStatus(TransactionStatus.FAILED);
                     return transactionRepository.save(txn);
                 }
@@ -101,7 +101,7 @@ public class BrokerOrchestrationService {
                 a.setTimestamp(Instant.now());
                 a.setFailureReason(ex.getStatusCode().toString());
                 txn.addAudit(a);
-                rollbackReserved(reserved);
+                rollbackReserved(reserved, txn, step);
                 txn.setStatus(TransactionStatus.FAILED);
                 return transactionRepository.save(txn);
             } catch (RestClientException ex) {
@@ -113,7 +113,7 @@ public class BrokerOrchestrationService {
                 a.setTimestamp(Instant.now());
                 a.setFailureReason("SUPPLIER_UNREACHABLE");
                 txn.addAudit(a);
-                rollbackReserved(reserved);
+                rollbackReserved(reserved, txn, step);
                 txn.setStatus(TransactionStatus.FAILED);
                 return transactionRepository.save(txn);
             }
@@ -123,16 +123,41 @@ public class BrokerOrchestrationService {
         return transactionRepository.save(txn);
     }
 
-    private void rollbackReserved(List<TransactionItem> reserved) {
+    private void rollbackReserved(List<TransactionItem> reserved, Transaction txn, int step) {
         for (TransactionItem it : reserved) {
+            if (it.getReservationId() == null) continue;
+
             String base = supplierConfiguration.getSupplierUrl(it.getSupplier());
             String url = base + "/api/transaction/rollback";
-            if (it.getReservationId() == null) continue;
-            Map<String, Object> req = Map.of("reservationId", it.getReservationId().toString());
+
+            // Pass the UUID object directly, instead of converting to String,
+            // to ensure Jackson serializes it perfectly for the Supplier's backend
+            Map<String, Object> req = Map.of("reservationId", it.getReservationId());
+
             try {
                 restTemplate.postForEntity(url, req, Void.class);
-            } catch (Exception ignore) {
-                // best-effort rollback; record kept in audit by caller
+                AuditEntry a = new AuditEntry();
+                a.setStepId(step);
+                a.setPhase("ROLLBACK");
+                a.setSupplier(it.getSupplier());
+                a.setStatus("SUCCESS");
+                a.setTimestamp(Instant.now());
+                a.setReservationId(it.getReservationId());
+                txn.addAudit(a);
+
+            } catch (Exception ex) {
+                System.err.println("CRITICAL: Failed to rollback reservation for " + it.getSupplier() + ". Reason: " + ex.getMessage());
+                ex.printStackTrace();
+
+                AuditEntry a = new AuditEntry();
+                a.setStepId(step);
+                a.setPhase("ROLLBACK");
+                a.setSupplier(it.getSupplier());
+                a.setStatus("FAILED");
+                a.setTimestamp(Instant.now());
+                a.setReservationId(it.getReservationId());
+                a.setFailureReason(ex.getMessage() != null ? ex.getMessage().substring(0, Math.min(ex.getMessage().length(), 200)) : "UNKNOWN_ERROR");
+                txn.addAudit(a);
             }
         }
     }
