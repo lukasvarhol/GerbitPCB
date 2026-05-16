@@ -1,4 +1,4 @@
-package org.gerbitpcb.supplier.ti.security;
+package org.gerbitpcb.supplier.murata.security;
 
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
