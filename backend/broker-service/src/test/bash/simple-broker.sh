@@ -7,10 +7,13 @@
 #   2. Create an Auth0 M2M App: name="GerbitPCB Broker", authorize it for the Suppliers API
 #   3. Fill in the four variables below
 
-AUTH0_DOMAIN="gerbitpcb.eu.auth0.com"      # e.g. dev-abc123.eu.auth0.com
-CLIENT_ID="Vs1cFMqtIng9zu6MItjCX4HCvYO7NwTo"
-CLIENT_SECRET="cnIZy4iCSyLMMNrq9CzfUkFfBJOd9-bw0by8yQYfGxFvIvlfRHywenD-8Nwu18IM"
-AUDIENCE="https://gerbitpcb-supplier"
+ENV_FILE="$(dirname "$0")/.env"
+if [ ! -f "$ENV_FILE" ]; then
+  echo "error: missing $ENV_FILE copy .env.example and fill in the credentials that i sent on whatsapp."
+  exit 1
+fi
+# shellcheck source=.env
+source "$ENV_FILE"
 
 SUPPLIER_URL="http://74.248.131.180:8081"
 # SUPPLIER_URL="http://localhost:8081"
