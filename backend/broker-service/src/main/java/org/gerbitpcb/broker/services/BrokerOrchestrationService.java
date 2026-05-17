@@ -9,11 +9,12 @@ import org.gerbitpcb.broker.dto.CreateTransactionRequest;
 import org.gerbitpcb.broker.exceptions.InvalidTransactionStateException;
 import org.gerbitpcb.broker.exceptions.TransactionNotFoundException;
 import org.gerbitpcb.broker.repository.TransactionRepository;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
-import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestClientException;
+import org.springframework.web.client.RestClientResponseException;
 import org.springframework.web.client.RestTemplate;
 
 import java.time.Instant;
@@ -21,6 +22,13 @@ import java.util.*;
 
 @Service
 public class BrokerOrchestrationService {
+
+    private static final Logger log = LoggerFactory.getLogger(BrokerOrchestrationService.class);
+    private static final String PHASE_PREPARE = "PREPARE";
+    private static final String PHASE_COMMIT = "COMMIT";
+    private static final String PHASE_ROLLBACK = "ROLLBACK";
+    private static final String STATUS_SUCCESS = "SUCCESS";
+    private static final String STATUS_FAILED = "FAILED";
 
     private final TransactionRepository transactionRepository;
     private final RestTemplate restTemplate;
@@ -34,8 +42,11 @@ public class BrokerOrchestrationService {
         this.supplierConfiguration = supplierConfiguration;
     }
 
-    @Transactional
     public Transaction createTransaction(CreateTransactionRequest request) {
+        if (request == null || request.items() == null || request.items().isEmpty()) {
+            throw new IllegalArgumentException("Transaction request must include at least one item");
+        }
+
         Transaction txn = new Transaction();
         txn.setCustomerName(request.customerName());
         txn.setStatus(TransactionStatus.PENDING);
@@ -51,10 +62,9 @@ public class BrokerOrchestrationService {
             items.add(ti);
         }
         txn.setItems(items);
+        txn = transactionRepository.save(txn);
 
-        // Attempt phase 1: reserve on each supplier
         List<TransactionItem> reserved = new ArrayList<>();
-
         int step = 0;
         for (TransactionItem it : txn.getItems()) {
             step++;
@@ -62,57 +72,42 @@ public class BrokerOrchestrationService {
             String base = supplierConfiguration.getSupplierUrl(supplier);
             String url = base + "/api/transaction/reserve";
             Map<String, Object> req = Map.of("sku", it.getSku(), "quantity", it.getQuantity());
+
             try {
                 ResponseEntity<Map> resp = restTemplate.postForEntity(url, req, Map.class);
                 Map body = resp.getBody();
-                if (body != null && body.containsKey("reservationId")) {
-                    String id = body.get("reservationId").toString();
-                    UUID rid = UUID.fromString(id);
-                    it.setReservationId(rid);
-                    reserved.add(it);
-                    AuditEntry a = new AuditEntry();
-                    a.setStepId(step);
-                    a.setPhase("PREPARE");
-                    a.setSupplier(supplier);
-                    a.setStatus("SUCCESS");
-                    a.setTimestamp(Instant.now());
-                    a.setReservationId(rid);
-                    txn.addAudit(a);
-                } else {
-                    AuditEntry a = new AuditEntry();
-                    a.setStepId(step);
-                    a.setPhase("PREPARE");
-                    a.setSupplier(supplier);
-                    a.setStatus("FAILED");
-                    a.setTimestamp(Instant.now());
-                    a.setFailureReason("NO_RESERVATION_ID");
-                    txn.addAudit(a);
-                    // rollback previously reserved
-                    rollbackReserved(reserved, txn, step);
-                    txn.setStatus(TransactionStatus.FAILED);
-                    return transactionRepository.save(txn);
+                Object reservationId = body == null ? null : body.get("reservationId");
+                if (reservationId == null) {
+                    throw new IllegalArgumentException("NO_RESERVATION_ID");
                 }
-            } catch (HttpClientErrorException ex) {
-                AuditEntry a = new AuditEntry();
-                a.setStepId(step);
-                a.setPhase("PREPARE");
-                a.setSupplier(supplier);
-                a.setStatus("FAILED");
-                a.setTimestamp(Instant.now());
-                a.setFailureReason(ex.getStatusCode().toString());
-                txn.addAudit(a);
+
+                UUID rid;
+                try {
+                    rid = UUID.fromString(reservationId.toString());
+                } catch (IllegalArgumentException ex) {
+                    throw new IllegalArgumentException("INVALID_RESERVATION_ID");
+                }
+
+                it.setReservationId(rid);
+                reserved.add(it);
+                txn.addAudit(createAudit(step, PHASE_PREPARE, supplier, STATUS_SUCCESS, rid, null));
+                txn = transactionRepository.save(txn);
+            } catch (IllegalArgumentException ex) {
+                txn.addAudit(createAudit(step, PHASE_PREPARE, supplier, STATUS_FAILED, null, ex.getMessage()));
+                rollbackReserved(reserved, txn, step);
+                txn.setStatus(TransactionStatus.FAILED);
+                return transactionRepository.save(txn);
+            } catch (RestClientResponseException ex) {
+                String body = ex.getResponseBodyAsString();
+                String failureReason = body == null || body.isBlank()
+                        ? ex.getStatusCode().toString()
+                        : ex.getStatusCode() + ": " + body;
+                txn.addAudit(createAudit(step, PHASE_PREPARE, supplier, STATUS_FAILED, null, failureReason));
                 rollbackReserved(reserved, txn, step);
                 txn.setStatus(TransactionStatus.FAILED);
                 return transactionRepository.save(txn);
             } catch (RestClientException ex) {
-                AuditEntry a = new AuditEntry();
-                a.setStepId(step);
-                a.setPhase("PREPARE");
-                a.setSupplier(supplier);
-                a.setStatus("FAILED");
-                a.setTimestamp(Instant.now());
-                a.setFailureReason("SUPPLIER_UNREACHABLE");
-                txn.addAudit(a);
+                txn.addAudit(createAudit(step, PHASE_PREPARE, supplier, STATUS_FAILED, null, ex.getMessage()));
                 rollbackReserved(reserved, txn, step);
                 txn.setStatus(TransactionStatus.FAILED);
                 return transactionRepository.save(txn);
@@ -125,123 +120,94 @@ public class BrokerOrchestrationService {
 
     private void rollbackReserved(List<TransactionItem> reserved, Transaction txn, int step) {
         for (TransactionItem it : reserved) {
-            if (it.getReservationId() == null) continue;
+            if (it.getReservationId() == null) {
+                continue;
+            }
 
             String base = supplierConfiguration.getSupplierUrl(it.getSupplier());
             String url = base + "/api/transaction/rollback";
-
-            // Pass the UUID object directly, instead of converting to String,
-            // to ensure Jackson serializes it perfectly for the Supplier's backend
             Map<String, Object> req = Map.of("reservationId", it.getReservationId());
 
             try {
                 restTemplate.postForEntity(url, req, Void.class);
-                AuditEntry a = new AuditEntry();
-                a.setStepId(step);
-                a.setPhase("ROLLBACK");
-                a.setSupplier(it.getSupplier());
-                a.setStatus("SUCCESS");
-                a.setTimestamp(Instant.now());
-                a.setReservationId(it.getReservationId());
-                txn.addAudit(a);
-
+                txn.addAudit(createAudit(step, PHASE_ROLLBACK, it.getSupplier(), STATUS_SUCCESS, it.getReservationId(), null));
+                it.setReservationId(null);
             } catch (Exception ex) {
-                System.err.println("CRITICAL: Failed to rollback reservation for " + it.getSupplier() + ". Reason: " + ex.getMessage());
-                ex.printStackTrace();
-
-                AuditEntry a = new AuditEntry();
-                a.setStepId(step);
-                a.setPhase("ROLLBACK");
-                a.setSupplier(it.getSupplier());
-                a.setStatus("FAILED");
-                a.setTimestamp(Instant.now());
-                a.setReservationId(it.getReservationId());
-                a.setFailureReason(ex.getMessage() != null ? ex.getMessage().substring(0, Math.min(ex.getMessage().length(), 200)) : "UNKNOWN_ERROR");
-                txn.addAudit(a);
+                log.error("Failed to rollback supplier reservation. supplier={}, transactionId={}, reservationId={}",
+                        it.getSupplier(), txn.getId(), it.getReservationId(), ex);
+                txn.addAudit(createAudit(step, PHASE_ROLLBACK, it.getSupplier(), STATUS_FAILED, it.getReservationId(), ex.getMessage()));
             }
+            transactionRepository.save(txn);
         }
     }
 
-    @Transactional
     public Transaction commitTransaction(UUID transactionId) {
         Transaction txn = transactionRepository.findById(transactionId)
                 .orElseThrow(() -> new TransactionNotFoundException("Transaction not found: " + transactionId));
-        if (txn.getStatus() != TransactionStatus.PREPARED) {
-            throw new InvalidTransactionStateException("Transaction not in PREPARED state, current state: " + txn.getStatus());
+        if (txn.getStatus() != TransactionStatus.PREPARED && txn.getStatus() != TransactionStatus.PARTIALLY_COMMITTED) {
+            throw new InvalidTransactionStateException("Transaction not in PREPARED/PARTIALLY_COMMITTED state, current state: " + txn.getStatus());
         }
 
         int step = 0;
+        boolean partialFailure = false;
         for (TransactionItem it : txn.getItems()) {
             step++;
-            if (it.getReservationId() == null) continue;
+            if (it.getReservationId() == null) {
+                continue;
+            }
             String base = supplierConfiguration.getSupplierUrl(it.getSupplier());
             String url = base + "/api/transaction/commit";
             Map<String, Object> req = Map.of("reservationId", it.getReservationId().toString());
             try {
                 restTemplate.postForEntity(url, req, Void.class);
-                AuditEntry a = new AuditEntry();
-                a.setStepId(step);
-                a.setPhase("COMMIT");
-                a.setSupplier(it.getSupplier());
-                a.setStatus("SUCCESS");
-                a.setTimestamp(Instant.now());
-                a.setReservationId(it.getReservationId());
-                txn.addAudit(a);
+                txn.addAudit(createAudit(step, PHASE_COMMIT, it.getSupplier(), STATUS_SUCCESS, it.getReservationId(), null));
+                it.setReservationId(null);
+                transactionRepository.save(txn);
             } catch (Exception ex) {
-                AuditEntry a = new AuditEntry();
-                a.setStepId(step);
-                a.setPhase("COMMIT");
-                a.setSupplier(it.getSupplier());
-                a.setStatus("FAILED");
-                a.setTimestamp(Instant.now());
-                a.setReservationId(it.getReservationId());
-                a.setFailureReason("COMMIT_FAILED");
-                txn.addAudit(a);
-                txn.setStatus(TransactionStatus.FAILED);
-                return transactionRepository.save(txn);
+                txn.addAudit(createAudit(step, PHASE_COMMIT, it.getSupplier(), STATUS_FAILED, it.getReservationId(), "COMMIT_FAILED"));
+                partialFailure = true;
+                break;
             }
         }
 
-        txn.setStatus(TransactionStatus.COMMITTED);
+        txn.setStatus(partialFailure ? TransactionStatus.PARTIALLY_COMMITTED : TransactionStatus.COMMITTED);
         return transactionRepository.save(txn);
     }
 
-    @Transactional
     public Transaction rollbackTransaction(UUID transactionId) {
         Transaction txn = transactionRepository.findById(transactionId)
                 .orElseThrow(() -> new TransactionNotFoundException("Transaction not found: " + transactionId));
+        if (txn.getStatus() == TransactionStatus.COMMITTED) {
+            throw new InvalidTransactionStateException("Committed transaction cannot be rolled back");
+        }
+        if (txn.getStatus() != TransactionStatus.PREPARED
+                && txn.getStatus() != TransactionStatus.PARTIALLY_COMMITTED
+                && txn.getStatus() != TransactionStatus.FAILED) {
+            throw new InvalidTransactionStateException("Transaction not in rollback-allowed state, current state: " + txn.getStatus());
+        }
 
         int step = 0;
+        boolean rollbackFailed = false;
         for (TransactionItem it : txn.getItems()) {
             step++;
-            if (it.getReservationId() == null) continue;
+            if (it.getReservationId() == null) {
+                continue;
+            }
             String base = supplierConfiguration.getSupplierUrl(it.getSupplier());
             String url = base + "/api/transaction/rollback";
             Map<String, Object> req = Map.of("reservationId", it.getReservationId().toString());
             try {
                 restTemplate.postForEntity(url, req, Void.class);
-                AuditEntry a = new AuditEntry();
-                a.setStepId(step);
-                a.setPhase("ROLLBACK");
-                a.setSupplier(it.getSupplier());
-                a.setStatus("SUCCESS");
-                a.setTimestamp(Instant.now());
-                a.setReservationId(it.getReservationId());
-                txn.addAudit(a);
+                txn.addAudit(createAudit(step, PHASE_ROLLBACK, it.getSupplier(), STATUS_SUCCESS, it.getReservationId(), null));
+                it.setReservationId(null);
             } catch (Exception ex) {
-                AuditEntry a = new AuditEntry();
-                a.setStepId(step);
-                a.setPhase("ROLLBACK");
-                a.setSupplier(it.getSupplier());
-                a.setStatus("FAILED");
-                a.setTimestamp(Instant.now());
-                a.setReservationId(it.getReservationId());
-                a.setFailureReason("ROLLBACK_FAILED");
-                txn.addAudit(a);
+                txn.addAudit(createAudit(step, PHASE_ROLLBACK, it.getSupplier(), STATUS_FAILED, it.getReservationId(), "ROLLBACK_FAILED"));
+                rollbackFailed = true;
             }
+            transactionRepository.save(txn);
         }
 
-        txn.setStatus(TransactionStatus.ROLLED_BACK);
+        txn.setStatus(rollbackFailed ? TransactionStatus.FAILED : TransactionStatus.ROLLED_BACK);
         return transactionRepository.save(txn);
     }
 
@@ -249,6 +215,17 @@ public class BrokerOrchestrationService {
         return transactionRepository.findById(transactionId)
                 .orElseThrow(() -> new TransactionNotFoundException("Transaction not found: " + transactionId));
     }
-}
 
+    private AuditEntry createAudit(int stepId, String phase, String supplier, String status, UUID reservationId, String failureReason) {
+        AuditEntry auditEntry = new AuditEntry();
+        auditEntry.setStepId(stepId);
+        auditEntry.setPhase(phase);
+        auditEntry.setSupplier(supplier);
+        auditEntry.setStatus(status);
+        auditEntry.setTimestamp(Instant.now());
+        auditEntry.setReservationId(reservationId);
+        auditEntry.setFailureReason(failureReason);
+        return auditEntry;
+    }
+}
 

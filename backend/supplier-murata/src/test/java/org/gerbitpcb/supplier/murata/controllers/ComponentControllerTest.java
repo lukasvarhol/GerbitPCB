@@ -9,6 +9,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.http.MediaType;
+import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
@@ -19,6 +20,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -37,6 +39,9 @@ class ComponentControllerTest {
     @MockitoBean
     private ComponentRepository componentRepository;
 
+    @MockitoBean
+    private JwtDecoder jwtDecoder;
+
     @Test
     void testReserveEndpoint_Success() throws Exception {
         UUID mockId = UUID.randomUUID();
@@ -45,6 +50,7 @@ class ComponentControllerTest {
         ReserveRequest payload = new ReserveRequest("NE555P", 10);
 
         mockMvc.perform(post("/api/transaction/reserve")
+                        .with(jwt())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(payload)))
                 .andExpect(status().isOk())
@@ -59,6 +65,7 @@ class ComponentControllerTest {
         ReservationRequest payload = new ReservationRequest(mockId);
 
         mockMvc.perform(post("/api/transaction/commit")
+                        .with(jwt())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(payload)))
                 .andExpect(status().is2xxSuccessful());
@@ -72,11 +79,11 @@ class ComponentControllerTest {
         ReservationRequest payload = new ReservationRequest(mockId);
 
         mockMvc.perform(post("/api/transaction/rollback")
+                        .with(jwt())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(payload)))
                 .andExpect(status().is2xxSuccessful());
     }
 }
-
 
 

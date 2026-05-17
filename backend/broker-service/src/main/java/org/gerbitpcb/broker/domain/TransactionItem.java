@@ -1,5 +1,6 @@
 package org.gerbitpcb.broker.domain;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.FetchType;
@@ -78,6 +79,7 @@ public class TransactionItem {
         this.reservationId = reservationId;
     }
 
+    @JsonIgnore
     public Transaction getTransaction() {
         return transaction;
     }
@@ -86,4 +88,3 @@ public class TransactionItem {
         this.transaction = transaction;
     }
 }
-
