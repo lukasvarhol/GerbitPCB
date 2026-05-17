@@ -1,5 +1,6 @@
 package org.gerbitpcb.broker.domain;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.persistence.Entity;
 import jakarta.persistence.FetchType;
 import jakarta.persistence.Id;
@@ -95,6 +96,7 @@ public class AuditEntry {
         this.failureReason = failureReason;
     }
 
+    @JsonIgnore
     public Transaction getTransaction() {
         return transaction;
     }
@@ -103,4 +105,3 @@ public class AuditEntry {
         this.transaction = transaction;
     }
 }
-

@@ -2,6 +2,8 @@ package org.gerbitpcb.broker.config;
 
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.web.client.RestTemplateBuilder;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -13,12 +15,13 @@ import org.springframework.security.oauth2.client.OAuth2AuthorizedClientManager;
 import org.springframework.security.oauth2.client.OAuth2AuthorizedClientProvider;
 import org.springframework.security.oauth2.client.OAuth2AuthorizedClientProviderBuilder;
 import org.springframework.security.oauth2.client.OAuth2AuthorizedClientService;
-import org.springframework.security.oauth2.client.endpoint.OAuth2ClientCredentialsGrantRequest;
 import org.springframework.security.oauth2.client.endpoint.RestClientClientCredentialsTokenResponseClient;
 import org.springframework.security.oauth2.client.registration.ClientRegistrationRepository;
 import org.springframework.web.client.RestTemplate;
 import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.MultiValueMap;
+
+import java.time.Duration;
 
 /**
  * Purpose: Configures a Machine-to-Machine (M2M) OAuth2 Client Credentials flow so the
@@ -50,6 +53,7 @@ public class OAuth2ClientConfig {
      * client-credentials token request.
      */
     @Bean
+    @ConditionalOnBean(ClientRegistrationRepository.class)
     public OAuth2AuthorizedClientManager authorizedClientManager(
             ClientRegistrationRepository clientRegistrationRepository,
             OAuth2AuthorizedClientService authorizedClientService) {
@@ -74,13 +78,18 @@ public class OAuth2ClientConfig {
         return manager;
     }
 
-    /**
-     * Adds a ClientHttpRequestInterceptor that runs the token flow and applies the
-     * Authorization header to all outgoing broker requests.
-     */
     @Bean
     public RestTemplate restTemplate(RestTemplateBuilder builder,
-                                     @Qualifier("authorizedClientManager") OAuth2AuthorizedClientManager clientManager) {
+                                     @Qualifier("authorizedClientManager") ObjectProvider<OAuth2AuthorizedClientManager> clientManagerProvider) {
+        RestTemplateBuilder configuredBuilder = builder
+                .connectTimeout(Duration.ofSeconds(5))
+                .readTimeout(Duration.ofSeconds(30));
+
+        OAuth2AuthorizedClientManager clientManager = clientManagerProvider.getIfAvailable();
+        if (clientManager == null) {
+            return configuredBuilder.build();
+        }
+
         ClientHttpRequestInterceptor interceptor = (request, body, execution) -> {
             OAuth2AuthorizeRequest authorizeRequest = OAuth2AuthorizeRequest
                     .withClientRegistrationId(registrationId)
@@ -94,6 +103,6 @@ public class OAuth2ClientConfig {
             return execution.execute(request, body);
         };
 
-        return builder.additionalInterceptors(interceptor).build();
+        return configuredBuilder.additionalInterceptors(interceptor).build();
     }
 }

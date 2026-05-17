@@ -26,14 +26,11 @@ public class SupplierConfiguration {
         return endpoints;
     }
 
-    /**
-     * Retrieve the base URL for a supplier, with fallback to TI if not found.
-     * 
-     * @param supplier The supplier name (e.g., "TI", "Murata")
-     * @return The base URL for the supplier
-     */
     public String getSupplierUrl(String supplier) {
-        return endpoints.getOrDefault(supplier, endpoints.getOrDefault("TI", "http://localhost:8081"));
+        String configuredUrl = endpoints.get(supplier);
+        if (configuredUrl == null || configuredUrl.isBlank()) {
+            throw new IllegalArgumentException("Supplier endpoint is not configured: " + supplier);
+        }
+        return configuredUrl;
     }
 }
-
