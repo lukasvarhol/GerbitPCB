@@ -7,12 +7,15 @@ import org.gerbitpcb.supplier.ti.domain.ReservationStatus;
 import org.gerbitpcb.supplier.ti.exceptions.OutOfStockException;
 import org.gerbitpcb.supplier.ti.repository.ComponentRepository;
 import org.gerbitpcb.supplier.ti.repository.ReservationRepository;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
+import org.springframework.scheduling.annotation.Scheduled;
 
 @Service
 public class ComponentService {
@@ -52,6 +55,7 @@ public class ComponentService {
                 .component(component)
                 .quantity(quantity)
                 .status(ReservationStatus.RESERVED)
+                .createdAt(Instant.now())
                 .build();
 
         reservationRepository.save(reservation);
@@ -62,6 +66,11 @@ public class ComponentService {
     public void commit(UUID reservationId) {
         Reservation reservation = reservationRepository.findById(reservationId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Reservation not found"));
+
+        if (reservation.getStatus() == ReservationStatus.COMMITTED
+                || reservation.getStatus() == ReservationStatus.ROLLED_BACK) {
+            return;
+        }
 
         if (reservation.getStatus() != ReservationStatus.RESERVED) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Reservation not in RESERVED state");
@@ -83,6 +92,11 @@ public class ComponentService {
         Reservation reservation = reservationRepository.findById(reservationId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Reservation not found"));
 
+        if (reservation.getStatus() == ReservationStatus.COMMITTED
+                || reservation.getStatus() == ReservationStatus.ROLLED_BACK) {
+            return;
+        }
+
         if (reservation.getStatus() != ReservationStatus.RESERVED) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Reservation not in RESERVED state");
         }
@@ -98,5 +112,23 @@ public class ComponentService {
         component.setAvailableStock(component.getAvailableStock() + quantity);
         reservation.setStatus(ReservationStatus.ROLLED_BACK);
     }
-}
 
+    @Scheduled(fixedRate = 300000)
+    @Transactional
+    public void cleanupStaleReservations() {
+        Instant cutoff = Instant.now().minus(Duration.ofMinutes(5));
+        List<Reservation> staleReservations = reservationRepository
+                .findByStatusAndCreatedAtBefore(ReservationStatus.RESERVED, cutoff);
+
+        for (Reservation reservation : staleReservations) {
+            Component component = reservation.getComponent();
+            int quantity = reservation.getQuantity();
+
+            if (component.getReservedStock() >= quantity) {
+                component.setReservedStock(component.getReservedStock() - quantity);
+                component.setAvailableStock(component.getAvailableStock() + quantity);
+            }
+            reservation.setStatus(ReservationStatus.ROLLED_BACK);
+        }
+    }
+}

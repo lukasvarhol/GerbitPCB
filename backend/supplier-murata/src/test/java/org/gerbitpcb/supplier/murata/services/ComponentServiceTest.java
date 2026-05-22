@@ -12,14 +12,15 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.web.server.ResponseStatusException;
-
 import java.math.BigDecimal;
+import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
@@ -90,11 +91,12 @@ class ComponentServiceTest {
     }
     
     @Test
-    void commit_WrongState_ThrowsConflict() {
+    void commit_AlreadyRolledBack_NoOp() {
         reservation.setStatus(ReservationStatus.ROLLED_BACK);
         when(reservationRepository.findById(reservationId)).thenReturn(Optional.of(reservation));
-        
-        assertThrows(ResponseStatusException.class, () -> componentService.commit(reservationId));
+
+        assertDoesNotThrow(() -> componentService.commit(reservationId));
+        assertEquals(ReservationStatus.ROLLED_BACK, reservation.getStatus());
     }
 
     @Test
@@ -110,5 +112,23 @@ class ComponentServiceTest {
         assertEquals(0, component.getReservedStock());
         assertEquals(ReservationStatus.ROLLED_BACK, reservation.getStatus());
     }
-}
 
+    @Test
+    void cleanupStaleReservations_ReleasesStockAndMarksRolledBack() {
+        reservation.setCreatedAt(Instant.now().minusSeconds(600));
+        reservation.setStatus(ReservationStatus.RESERVED);
+        component.setReservedStock(10);
+        component.setAvailableStock(90);
+
+        when(reservationRepository.findByStatusAndCreatedAtBefore(eq(ReservationStatus.RESERVED), any(Instant.class)))
+                .thenReturn(List.of(reservation));
+
+        componentService.cleanupStaleReservations();
+
+        assertEquals(0, component.getReservedStock());
+        assertEquals(100, component.getAvailableStock());
+        assertEquals(ReservationStatus.ROLLED_BACK, reservation.getStatus());
+        verify(reservationRepository, times(1))
+                .findByStatusAndCreatedAtBefore(eq(ReservationStatus.RESERVED), any(Instant.class));
+    }
+}
