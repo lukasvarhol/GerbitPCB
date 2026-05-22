@@ -13,6 +13,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageConversionException;
 import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestTemplate;
@@ -25,6 +26,7 @@ import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.times;
@@ -164,5 +166,40 @@ class BrokerOrchestrationServiceTest {
                 any(Map.class),
                 eq(Void.class));
     }
-}
 
+    @Test
+    void testOrchestration_MalformedReserveResponse_ThenRollback() {
+        UUID tiReservation = UUID.randomUUID();
+
+        when(restTemplate.postForEntity(
+                eq(TI_BASE_URL + "/api/transaction/reserve"),
+                any(Map.class),
+                eq(Map.class)))
+                .thenReturn(ResponseEntity.ok(Map.of("reservationId", tiReservation.toString())));
+
+        when(restTemplate.postForEntity(
+                eq(MURATA_BASE_URL + "/api/transaction/reserve"),
+                any(Map.class),
+                eq(Map.class)))
+                .thenThrow(new HttpMessageConversionException("JSON parse error"));
+
+        when(restTemplate.postForEntity(
+                eq(TI_BASE_URL + "/api/transaction/rollback"),
+                any(Map.class),
+                eq(Void.class)))
+                .thenReturn(ResponseEntity.ok().build());
+
+        Transaction failed = brokerOrchestrationService.createTransaction(request);
+
+        assertEquals(TransactionStatus.FAILED, failed.getStatus());
+        assertTrue(failed.getAuditTrail().stream()
+                .anyMatch(audit -> "PREPARE".equals(audit.getPhase())
+                        && MURATA.equals(audit.getSupplier())
+                        && "FAILED".equals(audit.getStatus())
+                        && "MALFORMED_RESPONSE: JSON parse error".equals(audit.getFailureReason())));
+        verify(restTemplate, times(1)).postForEntity(
+                eq(TI_BASE_URL + "/api/transaction/rollback"),
+                any(Map.class),
+                eq(Void.class));
+    }
+}

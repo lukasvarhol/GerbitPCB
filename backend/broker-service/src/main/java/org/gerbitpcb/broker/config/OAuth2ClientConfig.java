@@ -80,7 +80,16 @@ public class OAuth2ClientConfig {
 
     @Bean
     public RestTemplate restTemplate(RestTemplateBuilder builder,
-                                     @Qualifier("authorizedClientManager") OAuth2AuthorizedClientManager clientManager) {
+                                     @Qualifier("authorizedClientManager") ObjectProvider<OAuth2AuthorizedClientManager> clientManagerProvider) {
+        OAuth2AuthorizedClientManager clientManager = clientManagerProvider.getIfAvailable();
+        RestTemplateBuilder configuredBuilder = builder
+                .setConnectTimeout(Duration.ofSeconds(3))
+                .setReadTimeout(Duration.ofSeconds(3));
+
+        if (clientManager == null) {
+            return configuredBuilder.build();
+        }
+
         ClientHttpRequestInterceptor interceptor = (request, body, execution) -> {
             OAuth2AuthorizeRequest authorizeRequest = OAuth2AuthorizeRequest
                     .withClientRegistrationId(registrationId)
@@ -94,9 +103,7 @@ public class OAuth2ClientConfig {
             return execution.execute(request, body);
         };
 
-        return builder
-                .setConnectTimeout(Duration.ofSeconds(3))
-                .setReadTimeout(Duration.ofSeconds(3))
+        return configuredBuilder
                 .additionalInterceptors(interceptor)
                 .build();
     }
