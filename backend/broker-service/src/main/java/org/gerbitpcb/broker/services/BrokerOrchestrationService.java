@@ -12,6 +12,7 @@ import org.gerbitpcb.broker.repository.TransactionRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageConversionException;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestClientResponseException;
@@ -103,6 +104,11 @@ public class BrokerOrchestrationService {
                         ? ex.getStatusCode().toString()
                         : ex.getStatusCode() + ": " + body;
                 txn.addAudit(createAudit(step, PHASE_PREPARE, supplier, STATUS_FAILED, null, failureReason));
+                rollbackReserved(reserved, txn, step);
+                txn.setStatus(TransactionStatus.FAILED);
+                return transactionRepository.save(txn);
+            } catch (HttpMessageConversionException ex) {
+                txn.addAudit(createAudit(step, PHASE_PREPARE, supplier, STATUS_FAILED, null, "MALFORMED_RESPONSE"));
                 rollbackReserved(reserved, txn, step);
                 txn.setStatus(TransactionStatus.FAILED);
                 return transactionRepository.save(txn);
@@ -228,4 +234,3 @@ public class BrokerOrchestrationService {
         return auditEntry;
     }
 }
-
