@@ -108,7 +108,10 @@ public class BrokerOrchestrationService {
                 txn.setStatus(TransactionStatus.FAILED);
                 return transactionRepository.save(txn);
             } catch (HttpMessageConversionException ex) {
-                txn.addAudit(createAudit(step, PHASE_PREPARE, supplier, STATUS_FAILED, null, "MALFORMED_RESPONSE"));
+                String failureReason = ex.getMessage() == null || ex.getMessage().isBlank()
+                        ? "MALFORMED_RESPONSE"
+                        : "MALFORMED_RESPONSE: " + ex.getMessage();
+                txn.addAudit(createAudit(step, PHASE_PREPARE, supplier, STATUS_FAILED, null, failureReason));
                 rollbackReserved(reserved, txn, step);
                 txn.setStatus(TransactionStatus.FAILED);
                 return transactionRepository.save(txn);
