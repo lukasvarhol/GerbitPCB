@@ -10,6 +10,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.web.client.ExpectedCount;
 import org.springframework.test.web.client.MockRestServiceServer;
 import org.springframework.web.client.RestTemplate;
@@ -26,6 +27,10 @@ import static org.springframework.test.web.client.response.MockRestResponseCreat
 
 @SpringBootTest
 @ActiveProfiles("test")
+@TestPropertySource(properties = {
+        "suppliers.endpoints.TI=http://localhost:8081",
+        "suppliers.endpoints.Murata=http://localhost:8082"
+})
 class BrokerOrchestrationIntegrationTest {
 
     @Autowired
@@ -50,8 +55,9 @@ class BrokerOrchestrationIntegrationTest {
 
     @Test
     void testBroker_SupplierTimeout_TriggersFailure() {
+        String tiReservationId = "3bde3f1a-62e1-4a1b-8f5b-94d4db4a6a2f";
         mockServer.expect(ExpectedCount.once(), requestTo("http://localhost:8081/api/transaction/reserve")) // TI
-                .andRespond(withSuccess("{\"reservationId\":\"123\"}", MediaType.APPLICATION_JSON));
+                .andRespond(withSuccess("{\"reservationId\":\"" + tiReservationId + "\"}", MediaType.APPLICATION_JSON));
 
         mockServer.expect(ExpectedCount.once(), requestTo("http://localhost:8082/api/transaction/reserve")) // Murata
                 .andRespond(request -> {
@@ -76,15 +82,11 @@ class BrokerOrchestrationIntegrationTest {
         mockServer.expect(ExpectedCount.once(), requestTo("http://localhost:8081/api/transaction/reserve"))
                 .andRespond(withSuccess("<html>Database Error</html>", MediaType.TEXT_HTML));
 
-        // Let rollback fail or succeed depending on our test setup. For this test we just want to verify it triggers.
-        mockServer.expect(ExpectedCount.once(), requestTo("http://localhost:8081/api/transaction/rollback"))
-                .andRespond(withSuccess());
-
         Transaction transaction = brokerService.createTransaction(createRequest());
 
         assertEquals(TransactionStatus.FAILED, transaction.getStatus());
         assertTrue(transaction.getAuditTrail().stream()
-                .anyMatch(a -> a.getFailureReason().contains("MALFORMED_RESPONSE") || a.getFailureReason().contains("parse")));
+                .anyMatch(a -> a.getFailureReason() != null && a.getFailureReason().contains("MALFORMED_RESPONSE")));
                 
         mockServer.verify();
     }

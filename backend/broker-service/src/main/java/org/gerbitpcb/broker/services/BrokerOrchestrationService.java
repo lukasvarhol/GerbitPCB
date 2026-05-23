@@ -93,30 +93,27 @@ public class BrokerOrchestrationService {
                 reserved.add(it);
                 txn.addAudit(createAudit(step, PHASE_PREPARE, supplier, STATUS_SUCCESS, rid, null));
                 txn = transactionRepository.save(txn);
-            } catch (IllegalArgumentException ex) {
-                txn.addAudit(createAudit(step, PHASE_PREPARE, supplier, STATUS_FAILED, null, ex.getMessage()));
-                rollbackReserved(reserved, txn, step);
-                txn.setStatus(TransactionStatus.FAILED);
-                return transactionRepository.save(txn);
-            } catch (RestClientResponseException ex) {
-                String body = ex.getResponseBodyAsString();
-                String failureReason = body == null || body.isBlank()
-                        ? ex.getStatusCode().toString()
-                        : ex.getStatusCode() + ": " + body;
-                txn.addAudit(createAudit(step, PHASE_PREPARE, supplier, STATUS_FAILED, null, failureReason));
-                rollbackReserved(reserved, txn, step);
-                txn.setStatus(TransactionStatus.FAILED);
-                return transactionRepository.save(txn);
-            } catch (HttpMessageConversionException ex) {
-                String failureReason = ex.getMessage() == null || ex.getMessage().isBlank()
-                        ? "MALFORMED_RESPONSE"
-                        : "MALFORMED_RESPONSE: " + ex.getMessage();
-                txn.addAudit(createAudit(step, PHASE_PREPARE, supplier, STATUS_FAILED, null, failureReason));
-                rollbackReserved(reserved, txn, step);
-                txn.setStatus(TransactionStatus.FAILED);
-                return transactionRepository.save(txn);
-            } catch (RestClientException ex) {
-                txn.addAudit(createAudit(step, PHASE_PREPARE, supplier, STATUS_FAILED, null, ex.getMessage()));
+            } catch (IllegalArgumentException | HttpMessageConversionException | RestClientException ex) {
+
+                String rawMessage = ex.getMessage();
+                if (ex instanceof RestClientException) {
+                    if (ex.getCause() instanceof HttpMessageConversionException) {
+                        rawMessage = "MALFORMED_RESPONSE: " + ex.getCause().getMessage();
+                    } else if (rawMessage != null && rawMessage.contains("Could not extract response")) {
+                        // THIS catches the exact HTML content-type error you found in the debugger!
+                        rawMessage = "MALFORMED_RESPONSE: " + rawMessage;
+                    }
+                } else if (ex instanceof HttpMessageConversionException) {
+                    rawMessage = "MALFORMED_RESPONSE: " + rawMessage;
+                }
+
+                // Truncate the string to 250 characters max
+                String safeFailureReason = (rawMessage != null && rawMessage.length() > 250)
+                        ? rawMessage.substring(0, 250)
+                        : rawMessage;
+
+                // Execute the rollback and save (Written ONLY ONCE)
+                txn.addAudit(createAudit(step, PHASE_PREPARE, supplier, STATUS_FAILED, null, safeFailureReason));
                 rollbackReserved(reserved, txn, step);
                 txn.setStatus(TransactionStatus.FAILED);
                 return transactionRepository.save(txn);
