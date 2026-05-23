@@ -77,7 +77,7 @@ public class SupplierTiIntegrationTest {
      * - What it does:
      *      Sends two identical commit requests ("double-tap") for the same reservation ID.
      * - What it expects:
-     *      Both requests return HTTP 200 OK.
+     *      Both requests return HTTP 204 No Content.
      *      The available stock remains deducted correctly (90),
      *      reserved stock becomes 0,
      *      and the reservation status is COMMITTED.
