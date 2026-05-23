@@ -38,7 +38,7 @@ public class ComponentController {
     @PostMapping("/transaction/commit")
     public ResponseEntity<Void> commit(@RequestBody ReservationRequest request) {
         componentService.commit(request.reservationId());
-        return ResponseEntity.noContent().build();
+        return ResponseEntity.noContent().build();  // 204 = noContent, 200 = isOk
     }
 
     @PostMapping("/transaction/rollback")

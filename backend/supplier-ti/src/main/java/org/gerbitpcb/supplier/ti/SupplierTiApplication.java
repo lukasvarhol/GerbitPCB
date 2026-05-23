@@ -1,6 +1,7 @@
 package org.gerbitpcb.supplier.ti;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.scheduling.annotation.EnableScheduling;
 import org.gerbitpcb.supplier.ti.domain.Component;
 import org.gerbitpcb.supplier.ti.repository.ComponentRepository;
 import org.springframework.boot.CommandLineRunner;
@@ -9,6 +10,7 @@ import org.springframework.context.annotation.Bean;
 import java.math.BigDecimal;
 
 @SpringBootApplication
+@EnableScheduling
 public class SupplierTiApplication {
 
     public static void main(String[] args) {
@@ -57,4 +59,3 @@ public class SupplierTiApplication {
 //        return c;
 //    }
 }
-
