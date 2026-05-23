@@ -2,21 +2,19 @@ package org.gerbitpcb.supplier.murata;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
-import org.springframework.scheduling.annotation.EnableScheduling;
 import org.gerbitpcb.supplier.murata.domain.Component;
 import org.gerbitpcb.supplier.murata.repository.ComponentRepository;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.context.annotation.Bean;
 
 @SpringBootApplication
-@EnableScheduling
 public class SupplierMurataApplication {
 
     public static void main(String[] args) {
         SpringApplication.run(SupplierMurataApplication.class, args);
     }
 
-    // This block runs exactly once, immediately after the app starts up!
+//    // This block runs exactly once, immediately after the app starts up!
 //    @Bean
 //    public CommandLineRunner loadTestData(ComponentRepository repository) {
 //        return args -> {
@@ -43,3 +41,4 @@ public class SupplierMurataApplication {
 //        return c;
 //    }
 }
+
