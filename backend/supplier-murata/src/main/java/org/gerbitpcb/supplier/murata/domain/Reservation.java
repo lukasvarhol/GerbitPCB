@@ -51,6 +51,6 @@ public class Reservation {
     @Column(nullable = false)
     private ReservationStatus status;
 
-    @Column(nullable = false, updatable = false)
+    @Column(nullable = false)
     private Instant createdAt;
 }

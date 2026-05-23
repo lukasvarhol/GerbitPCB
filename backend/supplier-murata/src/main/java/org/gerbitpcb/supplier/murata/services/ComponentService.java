@@ -113,6 +113,15 @@ public class ComponentService {
         reservation.setStatus(ReservationStatus.ROLLED_BACK);
     }
 
+    /**
+     * Edge case:
+     * If the broker service crashes, gets disconnected due to a network partition,
+     * or fails after completing Phase 1 but before it sends Phase 2, those items would be stuck in a RESERVED status forever.
+     *
+     * Solution:
+     * This method runs every 5 minutes to clean up any reservations that have been in the RESERVED state for more than 5 minutes
+     */
+
     @Scheduled(fixedRate = 300000)
     @Transactional
     public void cleanupStaleReservations() {
