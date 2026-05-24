@@ -87,29 +87,58 @@ public class ComponentService {
         reservation.setStatus(ReservationStatus.COMMITTED);
     }
 
+    /**
+     * Rollback Logic:
+     *   1. True Idempotency:
+     *      If we already rolled this back, do nothing.
+     *      This allows the caller to safely retry rollbacks without worrying about side effects.
+     *
+     *   2. Standard Rollback (Phase 1 Abortion):
+     *      If the reservation is still in RESERVED state, we simply move the stock back from reserved to available.
+     *      This is the normal rollback path when Phase 1 fails and we never moved to Phase 2.
+     *
+     *   3. Compensating Transaction (Saga Pattern for Split-Brain):
+     *      If the reservation is already COMMITTED, it means we completed Phase 1 and moved to Phase 2,
+     *      but then something failed (like a crash or network issue) before the caller could confirm the commit.
+     *      In this case, we can't move stock from reserved to available because reserved is already 0. Instead, we just refund the available stock.
+     *      This is a compensating action that ensures eventual consistency, even in the face of failures during the commit phase.
+     *      see README docs for more in depth explanation of this edge case.
+     *
+     *   4. Mark as canceled:
+     *      In both cases, we mark the reservation as ROLLED_BACK to indicate that it has been handled and should not be processed again.
+     */
     @Transactional
     public void rollback(UUID reservationId) {
         Reservation reservation = reservationRepository.findById(reservationId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Reservation not found"));
 
-        if (reservation.getStatus() == ReservationStatus.COMMITTED
-                || reservation.getStatus() == ReservationStatus.ROLLED_BACK) {
+        // 1. True Idempotency: If we already rolled this back, do nothing.
+        if (reservation.getStatus() == ReservationStatus.ROLLED_BACK) {
             return;
-        }
-
-        if (reservation.getStatus() != ReservationStatus.RESERVED) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "Reservation not in RESERVED state");
         }
 
         Component component = reservation.getComponent();
         int quantity = reservation.getQuantity();
 
-        if (component.getReservedStock() < quantity) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "Reserved stock is lower than reservation");
+        // 2. Standard Rollback (Phase 1 Abortion)
+        if (reservation.getStatus() == ReservationStatus.RESERVED) {
+            if (component.getReservedStock() < quantity) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT, "Reserved stock is lower than reservation");
+            }
+            // Move stock from reserved back to available
+            component.setReservedStock(component.getReservedStock() - quantity);
+            component.setAvailableStock(component.getAvailableStock() + quantity);
+        }
+        // 3. Compensating Transaction (Saga Pattern for Split-Brain)
+        else if (reservation.getStatus() == ReservationStatus.COMMITTED) {
+            // Reserved stock is already 0. Just refund the available stock.
+            component.setAvailableStock(component.getAvailableStock() + quantity);
+        }
+        else {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Unknown reservation state: " + reservation.getStatus());
         }
 
-        component.setReservedStock(component.getReservedStock() - quantity);
-        component.setAvailableStock(component.getAvailableStock() + quantity);
+        // 4. Mark as canceled
         reservation.setStatus(ReservationStatus.ROLLED_BACK);
     }
 
