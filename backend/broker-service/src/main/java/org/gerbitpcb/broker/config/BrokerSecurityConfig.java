@@ -13,7 +13,7 @@ import org.springframework.security.web.SecurityFilterChain;
 public class BrokerSecurityConfig {
 
     /**
-     * Currently we implement the requirements for lvl 1 of the assignent, this means the following
+     * Currently we implement the requirements for lvl 1 of the assigment, this means the following
      * 1) there is no authentication required to CREATE an order (The frontend checkout)
      * 2) there is authentication required to VIEW orders (The Manager dashboard)
      *

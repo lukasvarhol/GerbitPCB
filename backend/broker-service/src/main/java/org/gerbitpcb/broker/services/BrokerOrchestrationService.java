@@ -337,7 +337,6 @@ public class BrokerOrchestrationService {
      * <b>Usage:</b> Automatically triggered by Spring Boot every 60 seconds (@Scheduled).
      */
     @Scheduled(fixedRate = 60000)
-    @Transactional
     public void sweepAndResumeStuckTransactions() {
         // Buffer: Only sweep transactions older than 1 minute to avoid interfering with active requests
         Instant cutoff = Instant.now().minus(Duration.ofMinutes(1));
