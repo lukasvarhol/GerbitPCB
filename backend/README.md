@@ -1,11 +1,13 @@
 ﻿# Distributed Order Broker: Two-Phase Commit (2PC) Architecture
 This project implements a robust Distributed Transaction Coordinator (Broker) that negotiates orders between multiple independent microservices (Suppliers like TI and Murata).
 Because standard database transactions cannot span across independent microservices, this system utilizes the Two-Phase Commit (2PC) Protocol. This ensures absolute data integrity: either all suppliers agree to fulfill an order, or the entire order is safely rolled back.
-## 🏢 Services overview
-- roker-service: Coordinator (2PC). Accepts customer orders and orchestrates supplier calls.
+## Services overview
+- broker-service: Coordinator (2PC). Accepts customer orders and orchestrates supplier calls.
 - supplier-ti: Supplier participant (TI). Stores components and reservations.
 - supplier-murata: Supplier participant (Murata). Stores components and reservations.
----
+
+<br />
+
 ## The Status Glossary
 To track the exact state of a distributed order, both the Broker and the Suppliers maintain strict internal states.
 ### Broker (Coordinator) Transaction Statuses
@@ -20,13 +22,12 @@ To track the exact state of a distributed order, both the Broker and the Supplie
 ### Supplier (Participant) Reservation Statuses
 | State | Explanation |
 |---|---|
-| **RESERVED** | The inventory is temporarily locked. It has been moved from vailable_stock to 
-eserved_stock. The supplier is awaiting the Broker's final decision. |
-| **COMMITTED** | The transaction is finalized. The 
-eserved_stock is permanently deducted from the warehouse. |
-| **ROLLED_BACK** | The transaction is canceled. The 
-eserved_stock is released and moved back to vailable_stock. |
----
+| **RESERVED** | The inventory is temporarily locked. It has been moved from available_stock to reserved_stock. The supplier is awaiting the Broker's final decision. |
+| **COMMITTED** | The transaction is finalized. The reserved_stock is permanently deducted from the warehouse. |
+| **ROLLED_BACK** | The transaction is canceled. The reserved_stock is released and moved back to available_stock. |
+
+<br />
+
 ## The Two-Phase Flow (The Happy Path)
 When a customer submits a valid order, the system executes the following synchronous workflow.
 ### Phase 1: The Prepare Phase (Reservation)
@@ -34,24 +35,22 @@ When a customer submits a valid order, the system executes the following synchro
 1. **Initiation:** The Broker receives the checkout request and saves a new Transaction to its database marked as PENDING.
 2. **Contacting Suppliers:** The Broker iterates through the requested items and sends a POST /reserve request to each respective supplier (e.g., TI, Murata).
 3. **Supplier Evaluation:** 
-   - The Supplier receives the request and checks its vailable_stock.
-   - If sufficient stock exists, the Supplier moves that exact amount into 
-eserved_stock to prevent double-booking.
+   - The Supplier receives the request and checks its available_stock.
+   - If sufficient stock exists, the Supplier moves that exact amount into reserved_stock to prevent double-booking.
    - The Supplier creates an internal database row marked as RESERVED and returns a unique 
 eservationId to the Broker.
-4. **Phase 1 Success:** Once all suppliers have successfully returned a 
-eservationId, the Broker updates the Transaction status to PREPARED.
+4. **Phase 1 Success:** Once all suppliers have successfully returned a reservationId, the Broker updates the Transaction status to PREPARED.
 ### Phase 2: The Commit Phase (Finalization)
 **Goal:** Instruct all suppliers to permanently deduct the locked inventory.
-1. **Fire Commit:** Recognizing the transaction is now PREPARED, the Broker iterates through the items a second time, sending a POST /commit request to each supplier using the stored 
-eservationIds.
+1. **Fire Commit:** Recognizing the transaction is now PREPARED, the Broker iterates through the items a second time, sending a POST /commit request to each supplier using the stored reservationIds.
 2. **Supplier Execution:**
    - The Supplier looks up the specific RESERVED row.
-   - It subtracts the item quantity from 
-eserved_stock (permanently removing it from the system).
+   - It subtracts the item quantity from reserved_stock (permanently removing it from the system).
    - It updates the internal Reservation status to COMMITTED.
 3. **Phase 2 Success:** Once all suppliers acknowledge the successful commit, the Broker updates the overarching Transaction status to COMMITTED, completing the order.
----
+
+<br />
+   
 ## Failure Handling and Edge Cases Overview
 
 | Edge Case | Failure Scenario | Resolution Strategy |
@@ -62,7 +61,7 @@ eserved_stock (permanently removing it from the system).
 | [4. The Cutoff Time (TTL)](#4-supplier-auto-remove-the-cutoff-time-ttl) | Supplier must protect locked stock | Supplier cron job (5 min) auto-rolls back stranded reserved stock. |
 | [5. The Race Condition](#5-the-ultimate-edge-case-the-race-condition--the-rollback-of-a-commit) | Broker recovery collides with Supplier TTL | Saga Pattern: Broker detects 404, triggers compensating rollback for committed stock. |
 
----
+<br />
 
 ### 1. Broker-Side Edge Cases: The Tactical Rollback
 
