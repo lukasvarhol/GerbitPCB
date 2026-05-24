@@ -20,6 +20,8 @@ import org.springframework.security.oauth2.client.registration.ClientRegistratio
 import org.springframework.web.client.RestTemplate;
 import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.MultiValueMap;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
 
@@ -42,6 +44,8 @@ import java.time.Duration;
 @Configuration
 public class OAuth2ClientConfig {
 
+    private static final Logger log = LoggerFactory.getLogger(OAuth2ClientConfig.class);
+
     @Value("${broker.security.oauth2.registration-id:broker}")
     private String registrationId;
 
@@ -53,7 +57,7 @@ public class OAuth2ClientConfig {
      * client-credentials token request.
      */
     @Bean
-    @ConditionalOnBean(ClientRegistrationRepository.class)
+//    @ConditionalOnBean(ClientRegistrationRepository.class)
     public OAuth2AuthorizedClientManager authorizedClientManager(
             ClientRegistrationRepository clientRegistrationRepository,
             OAuth2AuthorizedClientService authorizedClientService) {
@@ -62,6 +66,9 @@ public class OAuth2ClientConfig {
             MultiValueMap<String, String> params = new LinkedMultiValueMap<>();
             if (audience != null && !audience.isBlank()) {
                 params.add("audience", audience);
+            }
+            if (log.isDebugEnabled()) {
+                log.debug("OAuth2 client-credentials audience requested: {}", audience);
             }
             return params;
         });
@@ -87,6 +94,7 @@ public class OAuth2ClientConfig {
                 .setReadTimeout(Duration.ofSeconds(3));
 
         if (clientManager == null) {
+            log.warn("OAuth2 client manager not available; outbound supplier calls will not include a Bearer token");
             return configuredBuilder.build();
         }
 
@@ -100,6 +108,9 @@ public class OAuth2ClientConfig {
                 throw new IllegalStateException("Failed to acquire OAuth2 access token");
             }
             request.getHeaders().setBearerAuth(client.getAccessToken().getTokenValue());
+            if (log.isDebugEnabled()) {
+                log.debug("OAuth2 Bearer token attached for registrationId={}", registrationId);
+            }
             return execution.execute(request, body);
         };
 

@@ -92,24 +92,33 @@ public class ComponentService {
         Reservation reservation = reservationRepository.findById(reservationId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Reservation not found"));
 
-        if (reservation.getStatus() == ReservationStatus.COMMITTED
-                || reservation.getStatus() == ReservationStatus.ROLLED_BACK) {
+        // 1. True Idempotency: If we already rolled this back, do nothing.
+        if (reservation.getStatus() == ReservationStatus.ROLLED_BACK) {
             return;
-        }
-
-        if (reservation.getStatus() != ReservationStatus.RESERVED) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "Reservation not in RESERVED state");
         }
 
         Component component = reservation.getComponent();
         int quantity = reservation.getQuantity();
 
-        if (component.getReservedStock() < quantity) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "Reserved stock is lower than reservation");
+        // 2. Standard Rollback (Phase 1 Abortion)
+        if (reservation.getStatus() == ReservationStatus.RESERVED) {
+            if (component.getReservedStock() < quantity) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT, "Reserved stock is lower than reservation");
+            }
+            // Move stock from reserved back to available
+            component.setReservedStock(component.getReservedStock() - quantity);
+            component.setAvailableStock(component.getAvailableStock() + quantity);
+        }
+        // 3. Compensating Transaction (Saga Pattern for Split-Brain)
+        else if (reservation.getStatus() == ReservationStatus.COMMITTED) {
+            // Reserved stock is already 0. Just refund the available stock.
+            component.setAvailableStock(component.getAvailableStock() + quantity);
+        }
+        else {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Unknown reservation state: " + reservation.getStatus());
         }
 
-        component.setReservedStock(component.getReservedStock() - quantity);
-        component.setAvailableStock(component.getAvailableStock() + quantity);
+        // 4. Mark as canceled
         reservation.setStatus(ReservationStatus.ROLLED_BACK);
     }
 
