@@ -23,12 +23,37 @@ public class TransactionController {
         this.brokerService = brokerService;
     }
 
+    /**
+     * This endpoint initiates the transaction (PREPARE) and confirms the transaction (COMMIT) when all parties agree.
+     * PARTIALLY_COMMITTED can only occur if the commit phase fails after a successful prepare, which is a rare edge case that can be resolved by the Sweep Job.
+     * <p>
+     * originally the two phases were separated into /prepare and /commit endpoints, but for better developer/user experience,
+     * we combine them into one endpoint to achieve a more seamless transaction flow.
+     * Two-Step Checkout vs Synchronous One-Step Checkout
+     * @param request
+     * @return ResponseEntity<CreateTransactionResponse>
+     */
+
     @PostMapping
     public ResponseEntity<CreateTransactionResponse> create(@Valid @RequestBody CreateTransactionRequest request) {
+        // Phase 1: The Broker negotiates the reservations
         Transaction txn = brokerService.createTransaction(request);
-        HttpStatus status = txn.getStatus() == TransactionStatus.PREPARED
-                ? HttpStatus.CREATED
-                : HttpStatus.BAD_GATEWAY;
+
+        // Phase 2: If Phase 1 succeeded, instantly finalize the commit
+        if (txn.getStatus() == TransactionStatus.PREPARED) {
+            txn = brokerService.commitTransaction(txn.getId());
+        }
+
+        // Determine the final HTTP status
+        HttpStatus status;
+        if (txn.getStatus() == TransactionStatus.COMMITTED) {
+            status = HttpStatus.CREATED; // Perfect Success
+        } else if (txn.getStatus() == TransactionStatus.PARTIALLY_COMMITTED) {
+            status = HttpStatus.ACCEPTED; // Split-brain occurred, the Sweep Job will fix it later
+        } else {
+            status = HttpStatus.BAD_GATEWAY; // Phase 1 failed, or full rollback occurred
+        }
+
         return ResponseEntity.status(status).body(new CreateTransactionResponse(txn.getId(), txn.getStatus()));
     }
 
