@@ -106,6 +106,15 @@ Imagine the Broker goes offline for 10 minutes right after Phase 1 finishes.
 
 <br />
 
+### Background Sweepers (Level 1 Architecture)
+
+| System Component | Execution Frequency | Purpose & Failure Scenarios Caught |
+| :--- | :--- | :--- |
+| **Broker Sweeper**<br>*(The Phase 1 & 2 Janitor)* | Every 60 seconds | **Target:** Transactions stuck for > 1 minute.<br>**Scenarios:** Broker crashes mid-checkout or network drops.<br>**How it works:** If stuck in `PENDING` (Phase 1 failed), it fires `POST /rollback` to clean up locks. If stuck in `PREPARED` or `PARTIALLY_COMMITTED` (Phase 2 failed), it fires `POST /commit` to finalize the split-brain order. |
+| **Supplier Sweeper**<br>*(The TTL Monitor)* | Every 5 minutes | **Target:** Local reservations stuck in `RESERVED` for > 5 minutes.<br>**Scenarios:** The Broker dies permanently and abandons the order.<br>**How it works:** Acts as a Time-To-Live (TTL) safeguard. It assumes the Broker is gone and auto-releases the locked stock back to `available_stock` by marking the reservation as `ROLLED_BACK`. |
+
+<br />
+
 ## API Reference (Broker)
 - POST /api/transactions
   - Combines Phase 1 and Phase 2 into one seamless synchronous checkout without two separate requests.
