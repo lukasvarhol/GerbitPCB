@@ -55,63 +55,58 @@ eservationId to the Broker.
 
 | Edge Case | Failure Scenario | Resolution Strategy |
 |-----------|------------------|---------------------|
-| [1. The Tactical Rollback](#1-broker-side-edge-cases-the-tactical-rollback) | Phase 1 failure (e.g., out of stock, timeout) | Immediate compensating rollback to release valid locks. |
-| [2. The Sweeper Job](#2-broker-side-auto-recovery-the-sweeper-job) | Broker crash mid-Phase 2 (Split-Brain) | Broker cron job retries stalled PREPARED/PARTIALLY_COMMITTED transactions. |
-| [3. Coordinator Crashes](#3-supplier-side-edge-cases-coordinator-crashes) | Broker dies permanently after Phase 1 | Supplier assumes control of localized inventory lock. |
-| [4. The Cutoff Time (TTL)](#4-supplier-auto-remove-the-cutoff-time-ttl) | Supplier must protect locked stock | Supplier cron job (5 min) auto-rolls back stranded reserved stock. |
-| [5. The Race Condition](#5-the-ultimate-edge-case-the-race-condition--the-rollback-of-a-commit) | Broker recovery collides with Supplier TTL | Saga Pattern: Broker detects 404, triggers compensating rollback for committed stock. |
+| [1. Phase 1 Failure (Immediate Rollback)](#1-phase-1-failure-immediate-rollback) | Supplier out of stock or unreachable during reservation. | Broker catches error and immediately rolls back valid locks. |
+| [2. Phase 2 Failure (Broker Sweeper)](#2-phase-2-failure-broker-sweeper) | Broker crashes or drops connection mid-commit. | Broker background job retries stalled PREPARED/PARTIALLY_COMMITTED transactions. |
+| [3. Coordinator Crash (Supplier Sweeper)](#3-coordinator-crash-supplier-sweeper) | Broker dies permanently after locking stock. | Supplier background job (5 min TTL) auto-releases stranded inventory. |
+| [4. Sweeper Collision (Compensating Transaction)](#4-sweeper-collision-compensating-transaction) | Broker recovery executes after Supplier TTL expiration. | Saga Pattern: Broker detects 404/409, triggers compensating rollback for already committed stock. |
 
 <br />
 
-### 1. Broker-Side Edge Cases: The Tactical Rollback
+### 1. Phase 1 Failure (Immediate Rollback)
 
 **Scenario:** A failure occurs during Phase 1 (The Prepare Phase).
-Imagine a customer orders a microcontroller from TI and a capacitor from Murata. The Broker successfully reserves the item at TI, but when it attempts to reserve the item at Murata, Murata is out of stock (or the Murata server is completely offline).
+A customer orders items from Supplier A and Supplier B. The Broker successfully reserves the item at Supplier A, but Supplier B is out of stock or offline.
 
-- **The Danger:** If the Broker simply aborts, TI's inventory remains permanently locked (`RESERVED`), resulting in orphaned inventory (a "Ghost Reservation").
-- **The Mechanism (Saga Pattern):** The Broker catches the HTTP error (e.g., 404 Not Found or a network timeout) from Murata. It immediately aborts the checkout process and fires a Compensating Transaction. The Broker sends a `POST /rollback` request to TI, instructing TI to release the previously locked microcontroller.
-- **The Result:** The overarching Transaction is marked as `FAILED`. Zero inventory is orphaned. The system remains perfectly consistent.
+- **The Danger:** If the Broker simply aborts, Supplier A's inventory remains permanently locked (`RESERVED`), resulting in orphaned inventory.
+- **The Mechanism:** The Broker catches the HTTP error (e.g., 404 Not Found or a network timeout) from Supplier B. It immediately aborts the checkout process and fires a Compensating Transaction: a `POST /rollback` request to Supplier A to release the locked stock.
+- **The Result:** The overarching Transaction is marked as `FAILED`. Zero inventory is orphaned, and the system remains perfectly consistent.
 
-### 2. Broker-Side Auto-Recovery: The Sweeper Job
+### 2. Phase 2 Failure (Broker Sweeper)
 
 **Scenario:** A failure occurs during Phase 2 (The Commit Phase), resulting in a "Split-Brain".
-Imagine Phase 1 succeeds perfectly. The Broker sends the Phase 2 `POST /commit` to TI, and TI successfully deducts the stock. However, before the Broker can send the `POST /commit` to Murata, the Broker server crashes, or the network drops.
+Phase 1 succeeds. The Broker sends the Phase 2 `POST /commit` to Supplier A, which succeeds. However, before the Broker can send the `POST /commit` to Supplier B, the Broker server crashes or the network drops.
 
-- **The Danger:** The transaction is stuck in `PARTIALLY_COMMITTED` (or `PREPARED`). TI has shipped the part, but Murata is stuck waiting for a commit that will never arrive.
-- **The Mechanism (The Sweeper):** The Broker runs an automated background cron job (`@Scheduled`) every 60 seconds. This job scans the database for any transactions stuck in `PENDING`, `PREPARED`, or `PARTIALLY_COMMITTED` that are older than 1 minute (to ensure it does not interfere with active checkouts).
-- **The Result:** The Sweeper picks up the stalled transaction and automatically re-triggers the commit or rollback logic, forcing the system back into a consistent state without human intervention.
+- **The Danger:** The transaction is stuck in `PARTIALLY_COMMITTED` (or `PREPARED`). Supplier A has processed the order, but Supplier B is stuck waiting for a commit that will never arrive.
+- **The Mechanism (Broker Sweeper):** The Broker runs an automated background cron job (`@Scheduled`) every 60 seconds. This job scans the database for transactions stuck in `PENDING`, `PREPARED`, or `PARTIALLY_COMMITTED` that are older than 1 minute (to avoid interfering with active checkouts).
+- **The Result:** The Broker Sweeper picks up the stalled transaction and automatically re-triggers the missing `commit` or `rollback` requests, forcing the system back into a consistent state without human intervention.
 
-### 3. Supplier-Side Edge Cases: Coordinator Crashes
+### 3. Coordinator Crash (Supplier Sweeper)
 
-**Scenario:** The Broker successfully reserves stock (Phase 1) but dies permanently before it can send the Commit or Rollback signal.
-From the Supplier's perspective, it handed out a `reservationId` and locked the stock in its `reserved_stock` column. It is now waiting blindly for the Broker to tell it what to do.
+**Scenario:** The Broker successfully reserves stock (Phase 1) but dies permanently before it can send the Phase 2 Commit or Rollback signals. From the Supplier's perspective, it locked the stock in its database and is waiting blindly for the Broker.
 
-- **The Danger:** Suppliers do not accept orders from just anyone; their inventory is their most valuable asset. If the Broker dies, the Supplier's stock is locked forever, preventing other real customers from buying it. Suppliers cannot rely entirely on the Broker to clean up its own messes.
+- **The Danger:** Suppliers cannot rely entirely on the Broker to clean up its own messes. If the Broker dies permanently, the Supplier's inventory is locked forever, preventing other real customers from purchasing it.
+- **The Mechanism (Supplier Sweeper):** Each Supplier runs its own independent background cron job (`@Scheduled`) every 5 minutes. This job acts as a Time-To-Live (TTL) monitor for localized reservations.
+- **The Result:** The Supplier Sweeper scans for `RESERVED` rows older than the 5-minute cutoff. Assuming the Broker has abandoned the order, the Supplier automatically marks the reservation as `ROLLED_BACK` and safely moves the locked quantity back into `available_stock`.
 
-### 4. Supplier Auto-Remove: The Cutoff Time (TTL)
+### 4. Sweeper Collision (Compensating Transaction)
 
-**Scenario:** The Supplier takes matters into its own hands to protect its inventory.
-
-- **The Mechanism (Participant Auto-Recovery):** Each Supplier (TI and Murata) runs its own independent background `@Scheduled` job (e.g., every 5 minutes). This job acts as a Time-To-Live (TTL) monitor for reservations.
-- **The Result:** The job scans for any `RESERVED` rows older than the 5-minute cutoff. Assuming the Broker has crashed or abandoned the order, the Supplier automatically marks the reservation as `ROLLED_BACK` and safely moves the locked quantity back into `available_stock`.
-
-### 5. The Ultimate Edge Case: The Race Condition & The "Rollback of a Commit"
-
-**Scenario:** The Broker's Sweeper Job and the Supplier's Auto-Remove Job collide, resulting in a fractured Phase 2.
+**Scenario:** The Broker's Sweeper and the Supplier's Sweeper collide, resulting in a fractured Phase 2.
 Imagine the Broker goes offline for 10 minutes right after Phase 1 finishes.
 
-1. The Supplier's Auto-Remove job realizes the reservation is too old and safely rolls it back.
-2. Minutes later, the Broker boots back up. Its Sweeper job finds the stalled transaction and attempts to push the Phase 2 `POST /commit` through.
-3. The Broker successfully sends the Commit to TI, and TI permanently deducts the stock.
-4. The Broker sends the Commit to Murata, but Murata says: "404 Not Found, I already deleted that reservation via my cron job."
+1. The Supplier Sweeper realizes the reservation is too old and safely rolls it back (releasing the stock).
+2. Minutes later, the Broker boots back up. The Broker Sweeper finds the stalled transaction and attempts to push the Phase 2 `POST /commit` through.
+3. The Broker successfully sends the Commit to Supplier A, and Supplier A permanently deducts the stock.
+4. The Broker sends the Commit to Supplier B, but Supplier B rejects it because its Sweeper already deleted the reservation.
 
-- **The Defense Mechanism:** When Murata returns the 404 Not Found (or 409 Conflict), the Broker explicitly catches this. Instead of blindly retrying and crashing, it flags the audit log with `EXPIRED_RACE_CONDITION: 404`. It acknowledges that it missed its window and marks the overall transaction as `FAILED`.
-- **The "Rollback of a Commit" (Saga Pattern):** This is where the system performs its most aggressive recovery. In strict database theory, you cannot "rollback" something that is already `COMMITTED`. However, because the system is now in a split-brain state (TI committed, Murata aborted), the Broker breaks strict 2PC rules and executes a Compensating Transaction (The Saga Pattern).
-- **The Resolution:** The Broker turns around and fires a `POST /rollback` back to TI for the item that TI already committed. TI receives this, realizes it is a compensating action, and puts the previously shipped microcontroller back on the warehouse shelf. Total system consistency is restored.
+- **The Defense Mechanism:** When Supplier B returns a 404 Not Found (or 409 Conflict), the Broker explicitly catches it. Instead of blindly retrying, it flags the audit log with `EXPIRED_RACE_CONDITION` and marks the overall transaction as `FAILED`.
+- **The Mechanism (Compensating Transaction):** The system is now in a split-brain state (Supplier A committed, Supplier B aborted). The Broker breaks strict 2PC rules and executes a Compensating Transaction (Saga Pattern). It fires a `POST /rollback` back to Supplier A for the item that Supplier A *already committed*. 
+- **The Result:** Supplier A receives the rollback, realizes it is a compensating action, and puts the previously shipped item back into available inventory. Total system consistency is restored.
 
-> **Note on Architecture:** This defense ensures that the Supplier remains the absolute source of truth regarding its own inventory, preventing the Broker from forcing a commit on stock that may have already been sold to someone else.
----
-## 🛠 API Reference (Broker)
+> **Note on Architecture:** This collision defense ensures that the Supplier remains the absolute source of truth regarding its own inventory, preventing the Broker from forcing a commit on stock that may have already been sold to another customer.
+
+<br />
+
+## API Reference (Broker)
 - POST /api/transactions
   - Combines Phase 1 and Phase 2 into one seamless synchronous checkout without two separate requests.
 - GET /api/transactions/{id}
@@ -120,7 +115,9 @@ Imagine the Broker goes offline for 10 minutes right after Phase 1 finishes.
   - Manually resumes Phase 2 for PREPARED or PARTIALLY_COMMITTED transactions.
 - POST /api/transactions/{id}/rollback
   - Explicitly cancels a transaction allowing admin overrides.
----
+
+<br />
+
 ## Security Model (Current State)
 - **Client -> Broker**:
   - POST /api/transactions is open (anonymous checkout).
@@ -128,14 +125,45 @@ Imagine the Broker goes offline for 10 minutes right after Phase 1 finishes.
 - **Broker -> Suppliers**:
   - OAuth2 Client Credentials (Broker requests a token dynamically, sends Bearer token to suppliers).
   - Suppliers validate JWTs as Resource Servers (requires strict issuer/audience matches).
----
-## 🚧 What is Implemented vs Missing
+
+<br />
+
+## What is Implemented vs Missing
 ### Implemented
 - Synchronous 2PC orchestration in broker with full audit trail persistence.
 - Auto-reversal of successful Phase 1 reservations upon a later failure.
 - Auto-recovery sweep jobs on both Broker (60s) and Suppliers (5m) for robust resilience.
 - Machine-to-Machine OAuth2 authentication.
 ### Missing (Level 2 Requirements)
-- **Message Broker / Async Retries:** Phase 2 uses synchronous HTTP calls instead of resilient queueing systems like RabbitMQ/Kafka for retry logic.
 - End-user identity tokens explicitly passed all the way down.
+- **Message Broker / Async Retries:** Phase 2 uses synchronous HTTP calls instead of resilient queueing systems like RabbitMQ/Kafka for retry logic.
+
+  <br />
+  
+  > To implement the async retry system, the way that the current broker sweeping mechanism (janitor) is working needs to change. Here is how:
+  >
+  > ### 1. The CURRENT Architecture (Level 1)
+  > Right now, your Broker's `@Scheduled` Sweeper is the "Do-It-All Janitor." It is responsible for fixing absolutely everything if the network drops or the Broker crashes.
+  > 
+  > **How it handles stalled statuses (> 1 minute old):**
+  > * **`PENDING` (Phase 1 stalled):** The Sweeper assumes the Broker crashed while asking for reservations. It sends a `ROLLBACK` to any supplier that might have locked stock.
+  > * **`PREPARED` (Phase 1 finished, Phase 2 stalled):** The Sweeper assumes the customer paid, but the Broker crashed before it could finalize the order. The Sweeper steps in and fires the `COMMIT` to all suppliers.
+  > * **`PARTIALLY_COMMITTED` (Phase 2 Split-Brain):** The Sweeper sees TI got the commit but Murata didn't. It fires the missing `COMMIT` to Murata to finish the job.
+  > 
+  > **Summary:** The Sweeper owns both Phase 1 and Phase 2 recovery.
+  > 
+  > <br />
+  > 
+  > ### 2. The NEW Architecture (Level 2 with RabbitMQ)
+  > With RabbitMQ, Phase 2 is no longer executed by a synchronous HTTP call waiting for a response. Instead, the Broker instantly drops a "Commit Request" message into RabbitMQ and walks away. RabbitMQ guarantees that message will be delivered to the suppliers, no matter how many times it has to retry.
+  > 
+  > Because RabbitMQ now owns Phase 2, the Sweeper is demoted. If the Sweeper touches Phase 2, it will fight with RabbitMQ, causing race conditions and database locks at the supplier.
+  > 
+  > **How the statuses are handled in Level 2:**
+  > * **`PENDING` (Phase 1 stalled):** Sweeper **STILL** handles this. If the Broker crashes during Phase 1, the message never made it to RabbitMQ. The Sweeper must wake up, find the `PENDING` order, and fire `ROLLBACKS` to clean up.
+  > * **`PREPARED`:** Sweeper **IGNORES** this. The message is safely sitting in RabbitMQ. RabbitMQ will keep trying to contact the suppliers until they accept the `COMMIT`.
+  > * **`PARTIALLY_COMMITTED`:** Sweeper **IGNORES** this. RabbitMQ knows exactly which supplier failed and will use an Exponential Backoff queue (e.g., retry in 1 min, then 5 mins, then 15 mins) to push the missing `COMMIT` through.
+  > 
+  > **Summary:** The Sweeper is now just the Phase 1 Janitor. RabbitMQ is the unstoppable Phase 2 Delivery Engine.
+
 
