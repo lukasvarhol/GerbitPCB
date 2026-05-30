@@ -8,6 +8,11 @@ import org.springframework.security.config.annotation.web.configuration.EnableWe
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
 import org.springframework.security.web.SecurityFilterChain;
 
+import org.springframework.web.cors.CorsConfiguration;
+import org.springframework.web.cors.CorsConfigurationSource;
+import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
+import java.util.List;
+
 @Configuration
 @EnableWebSecurity
 public class BrokerSecurityConfig {
@@ -20,20 +25,34 @@ public class BrokerSecurityConfig {
      * for lvl 2 of the assignment we would need the following upgrades:
      * 1) now everybody needs some form of authentication/authorization flow, no more permitAll ...
      */
+    @Bean
+    public CorsConfigurationSource corsConfigurationSource() {
+	CorsConfiguration config = new CorsConfiguration();
+	config.setAllowedOrigins(List.of("http://localhost:5173"));
+	config.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "OPTIONS"));
+	config.setAllowedHeaders(List.of("*"));
+	config.setAllowCredentials(true);
+	return source -> {
+	    UrlBasedCorsConfigurationSource s = new UrlBasedCorsConfigurationSource();
+	    s.registerCorsConfiguration("/**", config);
+	    return s.getCorsConfiguration(source);
+	};
+    }
 
     @Bean
     public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
         http
-                .csrf(AbstractHttpConfigurer::disable)
-                .authorizeHttpRequests(auth -> auth
-                        // Allow anyone to CREATE an order (The frontend checkout)
-                        .requestMatchers(org.springframework.http.HttpMethod.POST, "/api/transactions").permitAll()
-                        // Require authentication to VIEW orders (The Manager dashboard)
-                        .requestMatchers(org.springframework.http.HttpMethod.GET, "/api/transactions").authenticated()	       
-                        // Lock down everything else just in case
-                        .anyRequest().authenticated()
-                )
-                .oauth2Client(Customizer.withDefaults());
-        return http.build();
+	    .cors(cors -> cors.configurationSource(corsConfigurationSource()))
+	    .csrf(AbstractHttpConfigurer::disable)
+	    .authorizeHttpRequests(auth -> auth
+				   // Allow anyone to CREATE an order (The frontend checkout)
+				   .requestMatchers(org.springframework.http.HttpMethod.POST, "/api/transactions").permitAll()
+				   // Require authentication to VIEW orders (The Manager dashboard)
+				   .requestMatchers(org.springframework.http.HttpMethod.GET, "/api/transactions").authenticated()	       
+				   // Lock down everything else just in case
+				   .anyRequest().authenticated()
+				   )
+	    .oauth2Client(Customizer.withDefaults());
+	return http.build();
     }
 }
