@@ -29,7 +29,7 @@ public class BrokerSecurityConfig {
                         // Allow anyone to CREATE an order (The frontend checkout)
                         .requestMatchers(org.springframework.http.HttpMethod.POST, "/api/transactions").permitAll()
                         // Require authentication to VIEW orders (The Manager dashboard)
-                        .requestMatchers(org.springframework.http.HttpMethod.GET, "/api/transactions").authenticated()
+                        .requestMatchers(org.springframework.http.HttpMethod.GET, "/api/transactions").authenticated()	       
                         // Lock down everything else just in case
                         .anyRequest().authenticated()
                 )
