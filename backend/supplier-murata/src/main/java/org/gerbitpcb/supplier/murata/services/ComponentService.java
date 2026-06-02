@@ -7,6 +7,7 @@ import org.gerbitpcb.supplier.murata.domain.ReservationStatus;
 import org.gerbitpcb.supplier.murata.exceptions.OutOfStockException;
 import org.gerbitpcb.supplier.murata.repository.ComponentRepository;
 import org.gerbitpcb.supplier.murata.repository.ReservationRepository;
+import org.gerbitpcb.supplier.murata.services.BrokerNotificationService;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
@@ -22,10 +23,12 @@ public class ComponentService {
 
     private final ComponentRepository componentRepository;
     private final ReservationRepository reservationRepository;
+    private final BrokerNotificationService brokerNotificationService;
 
-    public ComponentService(ComponentRepository componentRepository, ReservationRepository reservationRepository) {
+    public ComponentService(ComponentRepository componentRepository, ReservationRepository reservationRepository, BrokerNotificationService brokerNotificationService) {
         this.componentRepository = componentRepository;
         this.reservationRepository = reservationRepository;
+	this.brokerNotificationService = brokerNotificationService;
     }
 
     @Transactional(readOnly = true)
@@ -85,6 +88,8 @@ public class ComponentService {
 
         component.setReservedStock(component.getReservedStock() - quantity);
         reservation.setStatus(ReservationStatus.COMMITTED);
+
+	brokerNotificationService.notifyStockUpdate(component.getSku(), component.getAvailableStock());
     }
 
     /**
@@ -137,10 +142,14 @@ public class ComponentService {
         else {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Unknown reservation state: " + reservation.getStatus());
         }
-
         // 4. Mark as canceled
         reservation.setStatus(ReservationStatus.ROLLED_BACK);
+
+	brokerNotificationService.notifyStockUpdate(component.getSku(), component.getAvailableStock());
+	
     }
+
+    
 
     /**
      * Edge case:
@@ -167,6 +176,7 @@ public class ComponentService {
                 component.setAvailableStock(component.getAvailableStock() + quantity);
             }
             reservation.setStatus(ReservationStatus.ROLLED_BACK);
+	    brokerNotificationService.notifyStockUpdate(component.getSku(), component.getAvailableStock());
         }
     }
 }

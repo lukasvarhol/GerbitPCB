@@ -45,6 +45,7 @@ public class BrokerSecurityConfig {
 	    .cors(cors -> cors.configurationSource(corsConfigurationSource()))
 	    .csrf(AbstractHttpConfigurer::disable)
 	    .authorizeHttpRequests(auth -> auth
+				   .requestMatchers(org.springframework.http.HttpMethod.GET, "/api/components").permitAll()
 				   // Allow anyone to CREATE an order (The frontend checkout)
 				   .requestMatchers(org.springframework.http.HttpMethod.POST, "/api/transactions").permitAll()
 				   // Require authentication to VIEW orders (The Manager dashboard)
