@@ -115,15 +115,111 @@ Imagine the Broker goes offline for 10 minutes right after Phase 1 finishes.
 
 <br />
 
-## API Reference (Broker)
-- POST /api/transactions
-  - Combines Phase 1 and Phase 2 into one seamless synchronous checkout without two separate requests.
-- GET /api/transactions/{id}
-  - Returns the current broker transaction state and audit trail.
-- POST /api/transactions/{id}/commit
-  - Manually resumes Phase 2 for PREPARED or PARTIALLY_COMMITTED transactions.
-- POST /api/transactions/{id}/rollback
-  - Explicitly cancels a transaction allowing admin overrides.
+## API Reference
+### 1. Broker Orchestrator APIs
+*Base URL: `http://localhost:8090/api/transactions`*
+
+| Method | Endpoint | Purpose | Payloads (JSON) | HTTP Status Codes |
+| :--- | :--- | :--- | :--- | :--- |
+| **POST** | `/` | Executes the synchronous 2PC flow. Creates the transaction, reserves stock, and automatically commits. | **Req:** `{ customerName, items: [ { supplier, sku, quantity, unitPrice } ] }`<br>**Res:** `{ transactionId, status }` | `201 Created` (COMMITTED)<br>`202 Accepted` (PARTIALLY_COMMITTED)<br>`502 Bad Gateway` (FAILED/ROLLED_BACK) |
+| **GET** | `/{id}` | Fetches the current real-time state and full audit trail for a specific order. | **Req:** *None*<br>**Res:** `{ id, customerName, startedAt, status, items[], auditTrail[] }` | `200 OK` (Retrieved successfully)<br>`404 Not Found` (ID does not exist) |
+| **POST** | `/{id}/commit`<br>`/{id}/rollback` | Manual overrides (Admin/Ops). Forces a stuck transaction to continue to Phase 2, or aborts it. | **Req:** *None*<br>**Res:** *(Same as GET `/{id}`)* | `200 OK` (Override succeeded)<br>`409 Conflict` (Already in terminal state / Failed) |
+
+<br>
+
+### 2. Supplier Participant APIs
+*Base URL: `http://<supplier-ip>:<port>/api`*
+
+| Method | Endpoint | Purpose | Payloads (JSON) | HTTP Status Codes |
+| :--- | :--- | :--- | :--- | :--- |
+| **GET** | `/components` | Fetches the current live inventory catalog and stock levels of the supplier. | **Req:** *None*<br>**Res:** `[ { id, sku, name, price, availableStock, reservedStock } ]` | `200 OK` (Retrieved successfully) |
+| **POST** | `/transaction/reserve` | **Phase 1:** Checks available inventory and locks the requested amount into `reserved_stock`. | **Req:** `{ sku, quantity }`<br>**Res:** `{ reservationId }` | `200 OK` (Stock successfully locked)<br>`400/404/500` (Validation error, out of stock, or server unreachable) |
+| **POST** | `/transaction/commit` | **Phase 2 (Success):** Permanently deletes the reserved stock and finalizes the reservation. | **Req:** `{ reservationId }`<br>**Res:** *None (Empty)* | `204 No Content` (Commit succeeded)<br>`404/409` (ID missing, or Race Condition already rolled it back) |
+| **POST** | `/transaction/rollback` | **Phase 2 (Abort):** Cancels the reservation and frees the locked stock back to `available_stock`. | **Req:** `{ reservationId }`<br>**Res:** *None (Empty)* | `204 No Content` (Rollback succeeded, inventory freed) |
+
+<br />
+
+## 4. Test Payloads & Examples
+
+To manually test the distributed architecture, use the following JSON payloads against the Broker's main checkout endpoint (`POST http://localhost:8090/api/transactions`).
+
+### Test 1: The Happy Path (Success)
+This payload requests valid components from known suppliers. The Broker will successfully reserve both and immediately commit them.
+
+**Payload:**
+```json
+{
+  "customerName": "E2E Test: Happy Path",
+  "items": [
+    { "supplier": "TI", "sku": "ATMEGA328P", "quantity": 10, "unitPrice": 3.20 },
+    { "supplier": "Murata", "sku": "GRM188R71H104KA93D", "quantity": 50, "unitPrice": 0.08 }
+  ]
+}
+```
+
+Expected Result: 201 Created with status `COMMITTED`.
+### Test 2: The Tactical Rollback (Phase 1 Abortion)
+
+This payload pairs a valid item from TI with a fake item from Murata. It forces the Broker to successfully reserve TI's stock, hit a 404 at Murata, and instantly fire a compensating POST /rollback back to TI.
+
+Payload:
+```JSON
+
+{
+  "customerName": "E2E Test: Tactical Rollback",
+  "items": [
+    { "supplier": "TI", "sku": "ATMEGA328P", "quantity": 1, "unitPrice": 3.20 },
+    { "supplier": "Murata", "sku": "GHOST_CAPACITOR_999", "quantity": 1, "unitPrice": 0.08 }
+  ]
+}
+```
+
+Expected Result: `502 Bad Gateway` with status `FAILED`. (Check TI's database to verify the stock lock was released).
+### Test 3: The Unknown Supplier (Fail-Fast)
+
+This payload attempts to route an order to a supplier the Broker is not configured for, testing the system's immediate validation defenses.
+
+Payload:
+```JSON
+
+{
+  "customerName": "E2E Test: Unknown Supplier",
+  "items": [
+    { "supplier": "FakeCorp", "sku": "MAGIC_CHIP", "quantity": 1, "unitPrice": 100.00 }
+  ]
+}
+```
+
+Expected Result: `400 Bad Request` with an `INVALID_REQUEST` error. The transaction will not be saved to the database.
+### Example HTTP Requests
+
+Using cURL (Mac/Linux):
+```Bash
+
+curl -X POST http://localhost:8090/api/transactions \
+     -H "Content-Type: application/json" \
+     -d '{
+           "customerName": "cURL Happy Path",
+           "items": [
+             { "supplier": "TI", "sku": "ATMEGA328P", "quantity": 1, "unitPrice": 3.20 }
+           ]
+         }'
+```
+
+Using PowerShell (Windows):
+```PowerShell
+
+$json = @"
+{
+   "customerName": "PowerShell Happy Path",
+   "items": [
+     { "supplier": "TI", "sku": "ATMEGA328P", "quantity": 1, "unitPrice": 3.20 }
+   ]
+}
+"@
+
+Invoke-RestMethod -Uri "http://localhost:8090/api/transactions" -Method Post -Headers @{"Content-Type"="application/json"} -Body $json
+```
 
 <br />
 
