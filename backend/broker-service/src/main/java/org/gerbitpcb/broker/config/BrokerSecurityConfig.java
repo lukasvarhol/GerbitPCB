@@ -32,13 +32,10 @@ public class BrokerSecurityConfig {
 	config.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "OPTIONS"));
 	config.setAllowedHeaders(List.of("*"));
 	config.setAllowCredentials(true);
-	return source -> {
-	    UrlBasedCorsConfigurationSource s = new UrlBasedCorsConfigurationSource();
-	    s.registerCorsConfiguration("/**", config);
-	    return s.getCorsConfiguration(source);
-	};
+	UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
+	source.registerCorsConfiguration("/**", config);
+	return source;
     }
-
     @Bean
     public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
         http
@@ -46,6 +43,7 @@ public class BrokerSecurityConfig {
 	    .csrf(AbstractHttpConfigurer::disable)
 	    .authorizeHttpRequests(auth -> auth
 				   .requestMatchers(org.springframework.http.HttpMethod.GET, "/api/components").permitAll()
+				   .requestMatchers(org.springframework.http.HttpMethod.POST, "/api/components/stock-update").permitAll()
 				   // Allow anyone to CREATE an order (The frontend checkout)
 				   .requestMatchers(org.springframework.http.HttpMethod.POST, "/api/transactions").permitAll()
 				   // Require authentication to VIEW orders (The Manager dashboard)
@@ -53,7 +51,8 @@ public class BrokerSecurityConfig {
 				   // Lock down everything else just in case
 				   .anyRequest().authenticated()
 				   )
-	    .oauth2Client(Customizer.withDefaults());
+	    .oauth2Client(Customizer.withDefaults())
+	    .oauth2ResourceServer(oauth2 -> oauth2.jwt(jwt -> jwt.jwkSetUri("https://gerbitpcb.eu.auth0.com/.well-known/jwks.json")));
 	return http.build();
     }
 }
