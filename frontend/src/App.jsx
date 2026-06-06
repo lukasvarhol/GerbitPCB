@@ -407,7 +407,7 @@ function OBJViewer({ objUrl, isDefault }) {
 }
 
 export default function App() {
-    const { isAuthenticated, loginWithRedirect, logout, user } = useAuth0();
+    const { isAuthenticated, loginWithRedirect, logout, user, getAccessTokenSilently } = useAuth0();
 
     const [objUrl,             setObjUrl]            = useState(null);
     const [bomData,            setBomData]            = useState(null);
@@ -421,6 +421,30 @@ export default function App() {
     const [selectedComponents, setSelectedComponents] = useState([]);
     const [cartOpen,           setCartOpen]           = useState(false);
     const [componentStock, setComponentStock] = useState({});
+    const roles = user?.['https://api.gerbitpcb.com/roles'] ?? [];
+    const isManager = roles.includes('manager');
+    const [transactions, setTransactions] = useState([]);
+    const [txLoading, setTxLoading] = useState(false);
+
+    console.log('user:', user);
+    console.log('roles:', roles);
+    console.log('isManager:', isManager);
+
+    useEffect(() => {
+	if (!isAuthenticated || !isManager) return;
+	setTxLoading(true);
+	getAccessTokenSilently({ authorizationParams: { audience: 'https://api.gerbitpcb.com' } })
+            .then(token => fetch('http://localhost:8090/api/transactions', {
+		headers: { Authorization: `Bearer ${token}` }
+            }))
+            .then(res => res.json())
+            .then(data => {
+		console.log('transactions:', data);
+		setTransactions(data);
+            })
+            .catch(() => {})
+            .finally(() => setTxLoading(false));
+    }, [isAuthenticated, isManager]);
 
     useEffect(() => {
 	fetch('http://localhost:8090/api/components') //TODO: replace with azure endpoint
@@ -640,6 +664,39 @@ export default function App() {
 
 	    {/* ── Content ── */}
 	    <div style={{ maxWidth: 1000, margin: '0 auto', padding: '28px 24px', position: 'relative', zIndex: 1 }}>
+
+		{/* ── Manager dashboard ── */}
+		{isManager && (
+		    <Panel title="Manager dashboard — order history" screws={true}>
+			{txLoading ? (
+			    <div style={{ textAlign: 'center', padding: '20px 0' }}>
+				<Spin size="default" />
+			    </div>
+			) : transactions.length === 0 ? (
+			    <div style={{ fontFamily: "'VT323', monospace", fontSize: 18, color: C.inkLight, letterSpacing: '3px', textAlign: 'center', padding: '20px 0' }}>
+				NO TRANSACTIONS FOUND
+			    </div>
+			) : (
+			    <div style={{ ...inset(2), background: C.panelInset, maxHeight: 300, overflowY: 'auto' }}>
+				<div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', gap: 16, padding: '6px 12px', borderBottom: `1px solid ${C.panelShadow}` }}>
+				    <SilkLabel>Customer</SilkLabel>
+				    <SilkLabel>Status</SilkLabel>
+				    <SilkLabel>Date</SilkLabel>
+				</div>
+				{transactions.map((tx, i) => {
+				    const statusColor = tx.status === 'COMMITTED' ? C.phosphor : tx.status === 'FAILED' || tx.status === 'ROLLED_BACK' ? C.red : C.amber;
+				    return (
+					<div key={i} style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', gap: 16, padding: '7px 12px', borderBottom: i < transactions.length - 1 ? `1px solid ${C.panelShadow}` : 'none' }}>
+              <span style={{ fontSize: 12, fontFamily: "'Share Tech Mono', monospace", color: C.inkDark }}>{tx.customerName}</span>
+              <span style={{ fontSize: 11, fontFamily: "'Share Tech Mono', monospace", color: statusColor }}>{tx.status}</span>
+              <span style={{ fontSize: 11, fontFamily: "'Share Tech Mono', monospace", color: C.inkLight }}>{new Date(tx.startedAt).toLocaleDateString()}</span>
+            </div>
+          );
+        })}
+      </div>
+    )}
+  </Panel>
+)}
 
 		{/* Section 1: Project upload */}
 		<Panel title="PCB project upload" screws={true}>
