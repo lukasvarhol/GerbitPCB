@@ -420,6 +420,26 @@ export default function App() {
     const [pickAndPlace,       setPickAndPlace]       = useState(false);
     const [selectedComponents, setSelectedComponents] = useState([]);
     const [cartOpen,           setCartOpen]           = useState(false);
+    const [componentStock, setComponentStock] = useState({});
+
+    useEffect(() => {
+	fetch('http://localhost:8090/api/components') //TODO: replace with azure endpoint
+	    .then(res => res.json())
+	    .then(data => {
+		const map = {};
+		data.forEach(c => { map[c.sku] = c.availableStock; });
+		setComponentStock(map);
+	    })
+	    .catch(() => {});
+    }, []);
+
+    const bomStatus = (sku) => {
+	if (!(sku in componentStock)) return { label: 'UNKNOWN', color: C.inkLight };
+	const stock = componentStock[sku];
+	if (stock === 0)   return { label: 'OUT OF STOCK', color: C.red };
+	if (stock < 100)   return { label: 'LOW STOCK',    color: C.amber };
+	return               { label: 'IN STOCK',      color: C.phosphor };
+    };
 
     const handleZipUpload = async file => {
 	setZipLoading(true);
@@ -659,7 +679,9 @@ export default function App() {
 				    <div key={i} style={{ display: 'grid', gridTemplateColumns: '1fr auto auto', gap: 16, padding: '7px 12px', borderBottom: i < bomData.components.length - 1 ? `1px solid ${C.panelShadow}` : 'none' }}>
                     <span style={{ fontSize: 12, fontFamily: "'Share Tech Mono', monospace", color: C.inkDark }}>{item.sku}</span>
                     <span style={{ fontSize: 12, color: C.inkMid, fontFamily: "'Share Tech Mono', monospace" }}>×{item.quantity}</span>
-                    <span style={{ fontSize: 10, color: C.amberDim, fontFamily: "'Share Tech Mono', monospace" }}>PENDING</span>
+                    <span style={{ fontSize: 10, color: bomStatus(item.sku).color, fontFamily: "'Share Tech Mono', monospace" }}>
+                      {bomStatus(item.sku).label}
+                    </span>
                   </div>
                 ))}
               </div>

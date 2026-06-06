@@ -7,6 +7,7 @@ import org.gerbitpcb.supplier.ti.domain.ReservationStatus;
 import org.gerbitpcb.supplier.ti.exceptions.OutOfStockException;
 import org.gerbitpcb.supplier.ti.repository.ComponentRepository;
 import org.gerbitpcb.supplier.ti.repository.ReservationRepository;
+import org.gerbitpcb.supplier.ti.services.BrokerNotificationService;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
@@ -22,10 +23,12 @@ public class ComponentService {
 
     private final ComponentRepository componentRepository;
     private final ReservationRepository reservationRepository;
+    private final BrokerNotificationService brokerNotificationService;
 
-    public ComponentService(ComponentRepository componentRepository, ReservationRepository reservationRepository) {
+    public ComponentService(ComponentRepository componentRepository, ReservationRepository reservationRepository, BrokerNotificationService brokerNotificationService) {
         this.componentRepository = componentRepository;
         this.reservationRepository = reservationRepository;
+	this.brokerNotificationService = brokerNotificationService;
     }
 
     @Transactional(readOnly = true)
@@ -85,8 +88,30 @@ public class ComponentService {
 
         component.setReservedStock(component.getReservedStock() - quantity);
         reservation.setStatus(ReservationStatus.COMMITTED);
+
+	brokerNotificationService.notifyStockUpdate(component.getSku(), component.getAvailableStock());
     }
 
+    /**
+     * Rollback Logic:
+     *   1. True Idempotency:
+     *      If we already rolled this back, do nothing.
+     *      This allows the caller to safely retry rollbacks without worrying about side effects.
+     *
+     *   2. Standard Rollback (Phase 1 Abortion):
+     *      If the reservation is still in RESERVED state, we simply move the stock back from reserved to available.
+     *      This is the normal rollback path when Phase 1 fails and we never moved to Phase 2.
+     *
+     *   3. Compensating Transaction (Saga Pattern for Split-Brain):
+     *      If the reservation is already COMMITTED, it means we completed Phase 1 and moved to Phase 2,
+     *      but then something failed (like a crash or network issue) before the caller could confirm the commit.
+     *      In this case, we can't move stock from reserved to available because reserved is already 0. Instead, we just refund the available stock.
+     *      This is a compensating action that ensures eventual consistency, even in the face of failures during the commit phase.
+     *      see README docs for more in depth explanation of this edge case.
+     *
+     *   4. Mark as canceled:
+     *      In both cases, we mark the reservation as ROLLED_BACK to indicate that it has been handled and should not be processed again.
+     */
     @Transactional
     public void rollback(UUID reservationId) {
         Reservation reservation = reservationRepository.findById(reservationId)
@@ -117,10 +142,23 @@ public class ComponentService {
         else {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Unknown reservation state: " + reservation.getStatus());
         }
-
         // 4. Mark as canceled
         reservation.setStatus(ReservationStatus.ROLLED_BACK);
+
+	brokerNotificationService.notifyStockUpdate(component.getSku(), component.getAvailableStock());
+	
     }
+
+    
+
+    /**
+     * Edge case:
+     * If the broker service crashes, gets disconnected due to a network partition,
+     * or fails after completing Phase 1 but before it sends Phase 2, those items would be stuck in a RESERVED status forever.
+     *
+     * Solution:
+     * This method runs every 5 minutes to clean up any reservations that have been in the RESERVED state for more than 5 minutes
+     */
 
     @Scheduled(fixedRate = 300000)
     @Transactional
@@ -138,6 +176,7 @@ public class ComponentService {
                 component.setAvailableStock(component.getAvailableStock() + quantity);
             }
             reservation.setStatus(ReservationStatus.ROLLED_BACK);
+	    brokerNotificationService.notifyStockUpdate(component.getSku(), component.getAvailableStock());
         }
     }
 }

@@ -31,14 +31,24 @@ export default function ComponentList({ onQuantitiesChange }) {
     const [quantities, setQuantities] = useState({});
 
     useEffect(() => {
-	fetch('/api/components')
+	fetch('http://localhost:8090/api/components')
 	    .then(res => {
 		if (!res.ok) throw new Error('Backend not available');
 		return res.json();
 	    })
 	    .then(data => {
-		setComponents(data);
-		setQuantities(Object.fromEntries(data.map(c => [c.id, 0])));
+		const mapped = data.map(c => ({
+		    id: c.id,
+		    sku: c.sku,
+		    name: c.name,
+		    supplier: c.supplier,
+		    manufacturer: c.supplier,
+		    type: 'Component',
+		    priceEur: c.price,
+		    stock: c.availableStock,
+		}));
+		setComponents(mapped);
+		setQuantities(Object.fromEntries(mapped.map(c => [c.id, 0])));
 	    })
 	    .catch(() => {
 		// Fall back to mock data while backend is not ready
@@ -95,10 +105,11 @@ export default function ComponentList({ onQuantitiesChange }) {
 	    title: 'Stock',
 	    dataIndex: 'stock',
 	    key: 'stock',
-	    render: stock =>
-	    stock > 0
-		? <Tag style={{ background: '#141c0c', borderColor: '#4a6a2a', color: '#7aaa4a' }}>{stock} pcs</Tag>
-	    : <Tag style={{ background: '#141c0c', borderColor: '#8a5a06', color: '#c83020' }}>Out of stock</Tag>,
+	    render: stock => {
+		if (stock === 0)   return <Tag style={{ background: '#141c0c', borderColor: '#8a5a06', color: '#c83020' }}>Out of stock</Tag>;
+		if (stock < 100)   return <Tag style={{ background: '#141c0c', borderColor: '#c8820a', color: '#c8820a' }}>{stock} pcs — low</Tag>;
+		return                    <Tag style={{ background: '#141c0c', borderColor: '#4a6a2a', color: '#7aaa4a' }}>{stock} pcs</Tag>;
+	    },
 	},
 	{
 	    title: 'Qty',
