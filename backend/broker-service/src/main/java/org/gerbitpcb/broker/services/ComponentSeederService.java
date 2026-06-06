@@ -41,6 +41,8 @@ public class ComponentSeederService implements ApplicationRunner {
 	    try {
 		ResponseEntity<SupplierComponentDto[]> resp = restTemplate.getForEntity(url, SupplierComponentDto[].class);
 		SupplierComponentDto[] body = resp.getBody();
+		log.info("Seeder got {} components from {}", body == null ? "null" : body.length, url);
+		
 		if (body == null) continue;
 		for (SupplierComponentDto dto : body){
 		    Component component = Component.builder().sku(dto.sku()).name(dto.name()).price(dto.price()).supplier(entry.getKey()).availableStock(dto.availableStock()).build();
