@@ -1,6 +1,8 @@
 # Environment files
 .env
 .env.local
+.env.production
+*.env.production
 *.env.local
 application-local.properties
 **/application-local.properties
@@ -26,3 +28,4 @@ dist/
 # OS
 .DS_Store
 Thumbs.db
+

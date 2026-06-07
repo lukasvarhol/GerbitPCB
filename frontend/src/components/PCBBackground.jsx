@@ -2,7 +2,7 @@ export default function PCBBackground() {
   return (
     <div style={{
       position: 'fixed', inset: 0, zIndex: 0, pointerEvents: 'none',
-      backgroundImage: 'url(/src/assets/pcb-bg.svg)',
+      backgroundImage: 'url(/pcb-bg.svg)',
       backgroundSize: 'cover',
       backgroundPosition: 'center',
       opacity: 0.12,

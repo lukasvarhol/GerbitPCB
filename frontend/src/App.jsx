@@ -435,7 +435,7 @@ export default function App() {
 	if (!isAuthenticated || !isManager) return;
 	setTxLoading(true);
 	getAccessTokenSilently({ authorizationParams: { audience: 'https://api.gerbitpcb.com' } })
-            .then(token => fetch('http://localhost:8090/api/transactions', {
+            .then(token => fetch(`${import.meta.env.VITE_BROKER_URL}/api/transactions`, {
 		headers: { Authorization: `Bearer ${token}` }
             }))
             .then(res => res.json())
@@ -448,7 +448,7 @@ export default function App() {
     }, [isAuthenticated, isManager]);
 
     useEffect(() => {
-	fetch('http://localhost:8090/api/components') //TODO: replace with azure endpoint
+	fetch(`${import.meta.env.VITE_BROKER_URL}/api/components`) 
 	    .then(res => res.json())
 	    .then(data => {
 		const map = {};
@@ -463,14 +463,14 @@ export default function App() {
 
 const handleTxAction = async (txId, action) => {
     const token = await getAccessTokenSilently({ authorizationParams: { audience: 'https://api.gerbitpcb.com' } });
-    await fetch(`http://localhost:8090/api/transactions/${txId}/${action}`, {
+    await fetch(`${import.meta.env.VITE_BROKER_URL}/api/transactions/${txId}/${action}`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}` }
     });
     // refresh transactions
     setSelectedTx(null);
     setTxLoading(true);
-    const res = await fetch('http://localhost:8090/api/transactions', {
+    const res = await fetch(`${import.meta.env.VITE_BROKER_URL}/api/transactions`, {
         headers: { Authorization: `Bearer ${token}` }
     });
     setTransactions(await res.json());
@@ -514,7 +514,7 @@ const handleTxAction = async (txId, action) => {
     const handleOrder = async () => {
 	if (!selectedComponents.length) { alert('Please select at least one component.'); return; }
 	try {
-	    const res  = await fetch('http://localhost:8090/api/transactions', {
+	    const res  = await fetch(`${import.meta.env.VITE_BROKER_URL}/api/transactions`, {
 		method: 'POST',
 		headers: { 'Content-Type': 'application/json' },
 		body: JSON.stringify({
@@ -767,7 +767,7 @@ const handleTxAction = async (txId, action) => {
 
           <div style={{ marginTop: 18 }}>
             <SilkLabel style={{ marginBottom: 8 }}>3D render output</SilkLabel>
-            <OBJViewer objUrl={objUrl ?? '/src/assets/default-board.obj'} isDefault={!objUrl} />
+            <OBJViewer objUrl={objUrl ?? '/default-board.obj'} isDefault={!objUrl} />
           </div>
         </Panel>
 

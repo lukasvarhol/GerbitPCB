@@ -31,7 +31,7 @@ export default function ComponentList({ onQuantitiesChange }) {
     const [quantities, setQuantities] = useState({});
 
     useEffect(() => {
-	fetch('http://localhost:8090/api/components')
+	fetch(`${import.meta.env.VITE_BROKER_URL}/api/components`)
 	    .then(res => {
 		if (!res.ok) throw new Error('Backend not available');
 		return res.json();
