@@ -12,7 +12,6 @@ const COMPONENT_TYPES = [
     'Resistor',
     'Diode',
     'Connector',
-    'Crystal',
 ];
 
 const MOCK_COMPONENTS = [
