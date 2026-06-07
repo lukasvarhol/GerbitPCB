@@ -364,4 +364,8 @@ public class BrokerOrchestrationService {
             }
         }
     }
+
+    public List<Transaction> getAllTransactions() {
+	return transactionRepository.findAll();
+    }
 }

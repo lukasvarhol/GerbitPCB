@@ -32,6 +32,4 @@ build/
 ### VS Code ###
 .vscode/
 
-# Ignore local application properties to avoid committing credentials
-src/main/resources/application.properties
 

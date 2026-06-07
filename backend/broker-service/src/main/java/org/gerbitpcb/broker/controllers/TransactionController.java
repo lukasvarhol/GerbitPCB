@@ -12,6 +12,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.UUID;
+import java.util.List;
 
 @RestController
 @RequestMapping("/api/transactions")
@@ -33,6 +34,14 @@ public class TransactionController {
      * @param request
      * @return ResponseEntity<CreateTransactionResponse>
      */
+    @GetMapping
+    public ResponseEntity<List<TransactionResponse>> getAll() {
+	List<TransactionResponse> transactions = brokerService.getAllTransactions()
+	    .stream()
+	    .map(TransactionResponse::from)
+	    .toList();
+	return ResponseEntity.ok(transactions);
+    }
 
     @PostMapping
     public ResponseEntity<CreateTransactionResponse> create(@Valid @RequestBody CreateTransactionRequest request) {
