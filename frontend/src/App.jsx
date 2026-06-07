@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { Badge, Button, Collapse, Divider, Drawer, Switch, Upload, ConfigProvider, Spin } from 'antd';
+import { Badge, Button, Collapse, Divider, Drawer, Switch, Upload, ConfigProvider, Spin, Modal } from 'antd';
 import { ShoppingCartOutlined, InboxOutlined } from '@ant-design/icons';
 import { useAuth0 } from '@auth0/auth0-react';
 import ComponentList from './components/ComponentList';
@@ -425,6 +425,7 @@ export default function App() {
     const isManager = roles.includes('manager');
     const [transactions, setTransactions] = useState([]);
     const [txLoading, setTxLoading] = useState(false);
+    const [selectedTx, setSelectedTx] = useState(null);
 
     console.log('user:', user);
     console.log('roles:', roles);
@@ -456,6 +457,25 @@ export default function App() {
 	    })
 	    .catch(() => {});
     }, []);
+
+    const txTotal = (tx) =>
+    tx.items.reduce((sum, item) => sum + item.quantity * parseFloat(item.unitPrice), 0).toFixed(2);
+
+const handleTxAction = async (txId, action) => {
+    const token = await getAccessTokenSilently({ authorizationParams: { audience: 'https://api.gerbitpcb.com' } });
+    await fetch(`http://localhost:8090/api/transactions/${txId}/${action}`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` }
+    });
+    // refresh transactions
+    setSelectedTx(null);
+    setTxLoading(true);
+    const res = await fetch('http://localhost:8090/api/transactions', {
+        headers: { Authorization: `Bearer ${token}` }
+    });
+    setTransactions(await res.json());
+    setTxLoading(false);
+};
 
     const bomStatus = (sku) => {
 	if (!(sku in componentStock)) return { label: 'UNKNOWN', color: C.inkLight };
@@ -686,7 +706,7 @@ export default function App() {
 				{transactions.map((tx, i) => {
 				    const statusColor = tx.status === 'COMMITTED' ? C.phosphor : tx.status === 'FAILED' || tx.status === 'ROLLED_BACK' ? C.red : C.amber;
 				    return (
-					<div key={i} style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', gap: 16, padding: '7px 12px', borderBottom: i < transactions.length - 1 ? `1px solid ${C.panelShadow}` : 'none' }}>
+					<div key={i} onClick={() => setSelectedTx(tx)} style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', gap: 16, padding: '7px 12px', borderBottom: i < transactions.length - 1 ? `1px solid ${C.panelShadow}` : 'none' }}>
               <span style={{ fontSize: 12, fontFamily: "'Share Tech Mono', monospace", color: C.inkDark }}>{tx.customerName}</span>
               <span style={{ fontSize: 11, fontFamily: "'Share Tech Mono', monospace", color: statusColor }}>{tx.status}</span>
               <span style={{ fontSize: 11, fontFamily: "'Share Tech Mono', monospace", color: C.inkLight }}>{new Date(tx.startedAt).toLocaleDateString()}</span>
@@ -846,6 +866,68 @@ export default function App() {
           </>
         )}
       </Drawer>
+{/* Transaction detail modal */}
+<Modal
+    open={selectedTx !== null}
+    onCancel={() => setSelectedTx(null)}
+    footer={null}
+    width={800}
+    styles={{ body: { background: C.panel, padding: 24 } }}
+    style={{ top: 40 }}
+>
+    {selectedTx && (
+        <div style={{ fontFamily: "'Share Tech Mono', monospace" }}>
+            {/* Header */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 16, marginBottom: 24 }}>
+                <Readout value={selectedTx.customerName} label="Customer" />
+                <Readout value={selectedTx.status} label="Status" />
+                <Readout value={`€${txTotal(selectedTx)}`} label="Total" />
+                <Readout value={new Date(selectedTx.startedAt).toLocaleDateString()} label="Date" />
+            </div>
+
+            {/* Items */}
+            <SilkLabel style={{ marginBottom: 8 }}>Order items</SilkLabel>
+            <div style={{ ...inset(2), background: C.panelInset, marginBottom: 20 }}>
+                {selectedTx.items.map((item, i) => (
+                    <div key={i} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr auto auto', gap: 16, padding: '7px 12px', borderBottom: i < selectedTx.items.length - 1 ? `1px solid ${C.panelShadow}` : 'none' }}>
+                        <span style={{ fontSize: 12, color: C.inkDark }}>{item.sku}</span>
+                        <span style={{ fontSize: 12, color: C.inkMid }}>{item.supplier}</span>
+                        <span style={{ fontSize: 12, color: C.inkMid }}>×{item.quantity}</span>
+                        <span style={{ fontSize: 12, color: C.amber }}>€{(item.quantity * parseFloat(item.unitPrice)).toFixed(2)}</span>
+                    </div>
+                ))}
+            </div>
+
+            {/* Audit trail */}
+            <SilkLabel style={{ marginBottom: 8 }}>Audit trail</SilkLabel>
+            <div style={{ ...inset(2), background: C.screen, maxHeight: 200, overflowY: 'auto', marginBottom: 20 }}>
+                {selectedTx.auditTrail.map((a, i) => (
+                    <div key={i} style={{ display: 'grid', gridTemplateColumns: 'auto 1fr 1fr 1fr', gap: 12, padding: '6px 12px', borderBottom: i < selectedTx.auditTrail.length - 1 ? `1px solid #1e2a14` : 'none' }}>
+                        <span style={{ fontSize: 11, color: C.phosphorDim }}>#{a.stepId}</span>
+                        <span style={{ fontSize: 11, color: C.phosphor }}>{a.phase}</span>
+                        <span style={{ fontSize: 11, color: C.inkLight }}>{a.supplier}</span>
+                        <span style={{ fontSize: 11, color: a.status === 'SUCCESS' ? C.phosphor : C.red }}>{a.status}</span>
+                        {a.failureReason && <span style={{ fontSize: 10, color: C.red, gridColumn: '1 / -1', paddingLeft: 12 }}>{a.failureReason}</span>}
+                    </div>
+                ))}
+            </div>
+
+            {/* Actions */}
+            {['PENDING', 'PREPARED', 'PARTIALLY_COMMITTED'].includes(selectedTx.status) && (
+                <div style={{ display: 'flex', gap: 10 }}>
+                    {['PREPARED', 'PARTIALLY_COMMITTED'].includes(selectedTx.status) && (
+                        <PhysicalButton primary onClick={() => handleTxAction(selectedTx.id, 'commit')}>
+                            Force commit
+                        </PhysicalButton>
+                    )}
+                    <PhysicalButton onClick={() => handleTxAction(selectedTx.id, 'rollback')}>
+                        Rollback
+                    </PhysicalButton>
+                </div>
+            )}
+        </div>
+    )}
+</Modal>
     </ConfigProvider>
   );
 }

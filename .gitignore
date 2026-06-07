@@ -1,2 +1,28 @@
-.idea/
+# Environment files
 .env
+.env.local
+*.env.local
+application-local.properties
+**/application-local.properties
+
+# Emacs backup files
+*~
+\#*\#
+
+# Java build artifacts
+target/
+*.jar
+*.war
+
+# Node
+node_modules/
+dist/
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
