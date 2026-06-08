@@ -32,6 +32,9 @@ class ComponentServiceTest {
     @Mock
     private ReservationRepository reservationRepository;
 
+    @Mock
+    private BrokerNotificationService brokerNotificationService;
+
     @InjectMocks
     private ComponentService componentService;
 

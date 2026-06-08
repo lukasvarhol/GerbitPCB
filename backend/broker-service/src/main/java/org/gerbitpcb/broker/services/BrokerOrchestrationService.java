@@ -8,6 +8,7 @@ import org.gerbitpcb.broker.domain.TransactionStatus;
 import org.gerbitpcb.broker.dto.CreateTransactionRequest;
 import org.gerbitpcb.broker.exceptions.InvalidTransactionStateException;
 import org.gerbitpcb.broker.exceptions.TransactionNotFoundException;
+import org.gerbitpcb.broker.repository.StuckTransactionSummary;
 import org.gerbitpcb.broker.repository.TransactionRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -336,6 +337,7 @@ public class BrokerOrchestrationService {
      * <p>
      * <b>Usage:</b> Automatically triggered by Spring Boot every 60 seconds (@Scheduled).
      */
+    @Transactional
     @Scheduled(fixedRate = 60000)
     public void sweepAndResumeStuckTransactions() {
         // Buffer: Only sweep transactions older than 1 minute to avoid interfering with active requests
@@ -347,9 +349,9 @@ public class BrokerOrchestrationService {
                 TransactionStatus.PARTIALLY_COMMITTED  // Crashed halfway through Phase 2
         );
 
-        List<Transaction> stuckTransactions = transactionRepository.findByStatusInAndStartedAtBefore(stuckStatuses, cutoff);
+        List<StuckTransactionSummary> stuckTransactions = transactionRepository.findByStatusInAndStartedAtBefore(stuckStatuses, cutoff);
 
-        for (Transaction txn : stuckTransactions) {
+        for (StuckTransactionSummary txn : stuckTransactions) {
             log.info("Recovery Job: Sweeping stuck transaction {} in state {}", txn.getId(), txn.getStatus());
             try {
                 if (txn.getStatus() == TransactionStatus.PENDING) {

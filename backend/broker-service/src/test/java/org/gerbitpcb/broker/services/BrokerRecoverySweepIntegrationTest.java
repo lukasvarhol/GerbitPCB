@@ -8,12 +8,20 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.test.web.client.ExpectedCount;
 import org.springframework.test.web.client.MockRestServiceServer;
 import org.springframework.web.client.RestTemplate;
+
+import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.security.oauth2.client.OAuth2AuthorizedClient;
+import org.springframework.security.oauth2.client.OAuth2AuthorizedClientManager;
+import org.springframework.security.oauth2.client.registration.ClientRegistration;
+import org.springframework.security.oauth2.core.AuthorizationGrantType;
+import org.springframework.security.oauth2.core.OAuth2AccessToken;
 
 import java.math.BigDecimal;
 import java.time.Duration;
@@ -23,6 +31,8 @@ import java.util.List;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.when;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.requestTo;
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withSuccess;
 
@@ -35,6 +45,9 @@ import static org.springframework.test.web.client.response.MockRestResponseCreat
 class BrokerRecoverySweepIntegrationTest {
 
     @Autowired
+    private JdbcTemplate jdbcTemplate;
+
+    @Autowired
     private BrokerOrchestrationService brokerService;
 
     @Autowired
@@ -43,11 +56,36 @@ class BrokerRecoverySweepIntegrationTest {
     @Autowired
     private RestTemplate restTemplate;
 
+    @MockBean
+    private OAuth2AuthorizedClientManager authorizedClientManager;
+
     private MockRestServiceServer mockServer;
 
     @BeforeEach
     void setUp() {
+        // 1. Create a fake Auth0 Token
+        OAuth2AccessToken fakeToken = new OAuth2AccessToken(
+                OAuth2AccessToken.TokenType.BEARER, 
+                "mock-test-token", 
+                Instant.now(), 
+                Instant.now().plusSeconds(3600)
+        );
+
+        // 2. Wrap it in a dummy Client Registration
+        ClientRegistration clientReg = ClientRegistration.withRegistrationId("broker")
+                .authorizationGrantType(AuthorizationGrantType.CLIENT_CREDENTIALS)
+                .clientId("test-client")
+                .tokenUri("http://test-uri")
+                .build();
+
+        OAuth2AuthorizedClient authClient = new OAuth2AuthorizedClient(clientReg, "broker-service", fakeToken);
+
+        // 3. Tell the Mocked Manager to return the fake token whenever the interceptor asks
+        when(authorizedClientManager.authorize(any())).thenReturn(authClient);
+
+        // 4. Initialize the Mock Server
         mockServer = MockRestServiceServer.createServer(restTemplate);
+        
         transactionRepository.deleteAll();
     }
 
@@ -120,12 +158,22 @@ class BrokerRecoverySweepIntegrationTest {
             item.setQuantity(spec.quantity());
             item.setUnitPrice(spec.unitPrice());
             item.setReservationId(spec.reservationId());
+            item.setTransaction(txn);
             transactionItems.add(item);
         }
 
         txn.setItems(transactionItems);
-        ReflectionTestUtils.setField(txn, "startedAt", Instant.now().minus(Duration.ofMinutes(2)));
-        return transactionRepository.save(txn);
+
+        Transaction savedTxn = transactionRepository.save(txn);
+
+        jdbcTemplate.update(
+                "UPDATE transactions SET started_at = ? WHERE id = ?",
+                Instant.now().minus(Duration.ofMinutes(2)),
+                savedTxn.getId()
+        );
+
+        // Return a freshly loaded instance from the DB
+        return transactionRepository.findById(savedTxn.getId()).orElseThrow();
     }
 
     private record TransactionItemSpec(String supplier, String sku, int quantity, BigDecimal unitPrice, UUID reservationId) {

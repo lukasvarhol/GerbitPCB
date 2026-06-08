@@ -8,6 +8,7 @@ import org.gerbitpcb.supplier.ti.repository.ComponentRepository;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.security.servlet.SecurityAutoConfiguration;
+import org.springframework.boot.autoconfigure.security.oauth2.resource.servlet.OAuth2ResourceServerAutoConfiguration;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
@@ -24,7 +25,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-@WebMvcTest(value = ComponentController.class, excludeAutoConfiguration = SecurityAutoConfiguration.class)
+@WebMvcTest(value = ComponentController.class, excludeAutoConfiguration = {SecurityAutoConfiguration.class, OAuth2ResourceServerAutoConfiguration.class})
 class ComponentControllerTest {
 
     @Autowired
@@ -79,6 +80,3 @@ class ComponentControllerTest {
                 .andExpect(status().is2xxSuccessful());
     }
 }
-
-
-

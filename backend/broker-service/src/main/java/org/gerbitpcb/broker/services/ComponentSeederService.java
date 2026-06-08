@@ -2,6 +2,7 @@ package org.gerbitpcb.broker.services;
 
 import org.gerbitpcb.broker.config.SupplierConfiguration;
 import org.gerbitpcb.broker.domain.Component;
+import org.springframework.context.annotation.Profile;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageConversionException;
 import org.springframework.stereotype.Service;
@@ -19,6 +20,7 @@ import java.math.BigDecimal;
 
 
 @Service
+@Profile("!test")
 public class ComponentSeederService implements ApplicationRunner {
 
     private static final Logger log = LoggerFactory.getLogger(ComponentSeederService.class);
