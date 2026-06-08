@@ -7,13 +7,13 @@ import (
 
 
 type Component struct {
-	Id uuid.UUID `gorm:"type:uuid;primaryKey;"`
-	Sku string `gorm:"column:sku;not null; unique"`
-	Price float64 `gorm:"column:price; not null"`
-	Name string `gorm:"column:name; not null"`
-	AvailableStock int `gorm:"column:available_stock; not null"`
-	ReservedStock int `gorm:"column:reserved_stock; not null"`
-	Version uint64 
+    Id             uuid.UUID `gorm:"type:uuid;primaryKey" json:"id"`
+    Sku            string    `gorm:"column:sku;not null;unique" json:"sku"`
+    Price          float64   `gorm:"column:price;not null" json:"price"`
+    Name           string    `gorm:"column:name;not null" json:"name"`
+    AvailableStock int       `gorm:"column:available_stock;not null" json:"availableStock"`
+    ReservedStock  int       `gorm:"column:reserved_stock;not null" json:"reservedStock"`
+    Version        uint64    `json:"version"`
 }
 
 type ReservationStatus string

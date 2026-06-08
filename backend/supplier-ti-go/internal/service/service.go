@@ -10,16 +10,15 @@ import (
 
 type Service struct {
 	repository *repository.Repository
+	webhookUrl string
 }
 
-func NewService(repository *repository.Repository) *Service {
-	return &Service{repository: repository}
+func NewService(repository *repository.Repository, webhookUrl string) *Service {
+	return &Service{repository: repository, webhookUrl: webhookUrl}
 }
 
 func (s *Service) GetAllComponents() ([]models.Component, error) {
-	var components []models.Component
-	components, err := s.repository.FindAllComponents()
-	return components, err
+    return s.repository.FindAllComponents()
 }
 
 func (s *Service) Reserve(sku string, quantity int) (uuid.UUID, error) {
@@ -31,6 +30,7 @@ func (s *Service) Reserve(sku string, quantity int) (uuid.UUID, error) {
 		return uuid.Nil, errors.New("Insufficient stock")
 	}
 	component.AvailableStock -= quantity
+	component.ReservedStock += quantity
 	err = s.repository.SaveComponent(component)
 	if err != nil {
 		return uuid.Nil, err
@@ -72,10 +72,12 @@ func (s *Service) Commit (reservationId uuid.UUID) error {
 		return err
 	}
 	reservation.Status = models.StatusCommitted
-		err = s.repository.SaveReservation(reservation)
+	err = s.repository.SaveReservation(reservation)
 	if err != nil {
 		return err
 	}
+
+	notifyBroker(s.webhookUrl, component.Sku, component.AvailableStock)
 	return nil
 }
 
@@ -106,14 +108,17 @@ func (s *Service) Rollback (reservationId uuid.UUID) error {
 		return errors.New("unknown reservation state: " + string(reservation.Status))
 	}
 	reservation.Status = models.StatusRolledBack
+	err = s.repository.SaveReservation(reservation)
+	if err != nil {
+		return err
+	}
 
 	err = s.repository.SaveComponent(&component)
 	if err != nil {
 		return err
 	}
+	notifyBroker(s.webhookUrl, component.Sku, component.AvailableStock)
 	return nil
-
-	//TODO brokerNotificationSevice.notifySTockUpdate
 }
 
 func (s *Service) CleanupStaleReservations() error {
@@ -134,7 +139,7 @@ func (s *Service) CleanupStaleReservations() error {
 		reservation.Status = models.StatusRolledBack
 		s.repository.SaveReservation(&reservation)
 		s.repository.SaveComponent(&component)
-		//TODO broker notifictaion service
+		notifyBroker(s.webhookUrl, component.Sku, component.AvailableStock)
 	}
 	return nil
 }
