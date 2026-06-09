@@ -5,7 +5,9 @@ import org.gerbitpcb.broker.domain.TransactionStatus;
 import org.gerbitpcb.broker.dto.CreateTransactionRequest;
 import org.gerbitpcb.broker.dto.CreateTransactionResponse;
 import org.gerbitpcb.broker.dto.TransactionResponse;
+import org.gerbitpcb.broker.messaging.RetryQueue;
 import org.gerbitpcb.broker.services.BrokerOrchestrationService;
+import org.gerbitpcb.broker.services.BrokerOrchestrationService.CompletionResult;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -18,42 +20,41 @@ import java.util.UUID;
 public class TransactionController {
 
     private final BrokerOrchestrationService brokerService;
+    private final RetryQueue retryQueue;
 
-    public TransactionController(BrokerOrchestrationService brokerService) {
+    public TransactionController(BrokerOrchestrationService brokerService, RetryQueue retryQueue) {
         this.brokerService = brokerService;
+        this.retryQueue = retryQueue;
     }
 
     /**
-     * This endpoint initiates the transaction (PREPARE) and confirms the transaction (COMMIT) when all parties agree.
-     * PARTIALLY_COMMITTED can only occur if the commit phase fails after a successful prepare, which is a rare edge case that can be resolved by the Sweep Job.
-     * <p>
-     * originally the two phases were separated into /prepare and /commit endpoints, but for better developer/user experience,
-     * we combine them into one endpoint to achieve a more seamless transaction flow.
-     * Two-Step Checkout vs Synchronous One-Step Checkout
-     * @param request
-     * @return ResponseEntity<CreateTransactionResponse>
+     * Synchronous checkout with async fallback (Phase 4).
+     * Persists the order, then makes ONE synchronous completion attempt (Try + Confirm)
+     *   201 COMMITTED - all suppliers reserved + committed synchronously.
+     *   202 ACCEPTED - a supplier was unreachable; the order is queued and a background
+     *       process retries for up to 15 minutes (the customer can leave). Status is RETRYING.
+     *   502 BAD_GATEWAY - a deterministic business failure (e.g. out of stock); aborted.
+     *
      */
-
     @PostMapping
     public ResponseEntity<CreateTransactionResponse> create(@Valid @RequestBody CreateTransactionRequest request) {
-        // Phase 1: The Broker negotiates the reservations
-        Transaction txn = brokerService.createTransaction(request);
+        UUID id = brokerService.createPending(request).getId();
+        CompletionResult result = brokerService.attemptCompletion(id);
 
-        // Phase 2: If Phase 1 succeeded, instantly finalize the commit
-        if (txn.getStatus() == TransactionStatus.PREPARED) {
-            txn = brokerService.commitTransaction(txn.getId());
-        }
-
-        // Determine the final HTTP status
         HttpStatus status;
-        if (txn.getStatus() == TransactionStatus.COMMITTED) {
-            status = HttpStatus.CREATED; // Perfect Success
-        } else if (txn.getStatus() == TransactionStatus.PARTIALLY_COMMITTED) {
-            status = HttpStatus.ACCEPTED; // Split-brain occurred, the Sweep Job will fix it later
-        } else {
-            status = HttpStatus.BAD_GATEWAY; // Phase 1 failed, or full rollback occurred
+        switch (result) {
+            case COMPLETED -> status = HttpStatus.CREATED;
+            case RETRYABLE -> {
+                retryQueue.enqueue(id);
+                status = HttpStatus.ACCEPTED;
+            }
+            default -> {
+                brokerService.abort(id);
+                status = HttpStatus.BAD_GATEWAY;
+            }
         }
 
+        Transaction txn = brokerService.getTransaction(id);
         return ResponseEntity.status(status).body(new CreateTransactionResponse(txn.getId(), txn.getStatus()));
     }
 

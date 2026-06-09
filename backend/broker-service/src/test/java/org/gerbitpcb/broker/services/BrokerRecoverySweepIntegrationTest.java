@@ -3,6 +3,7 @@ package org.gerbitpcb.broker.services;
 import org.gerbitpcb.broker.domain.Transaction;
 import org.gerbitpcb.broker.domain.TransactionItem;
 import org.gerbitpcb.broker.domain.TransactionStatus;
+import org.gerbitpcb.broker.messaging.InMemoryRetryQueue;
 import org.gerbitpcb.broker.repository.TransactionRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -11,9 +12,6 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.util.ReflectionTestUtils;
-import org.springframework.test.web.client.ExpectedCount;
-import org.springframework.test.web.client.MockRestServiceServer;
-import org.springframework.web.client.RestTemplate;
 
 import java.math.BigDecimal;
 import java.time.Duration;
@@ -22,10 +20,12 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.springframework.test.web.client.match.MockRestRequestMatchers.requestTo;
-import static org.springframework.test.web.client.response.MockRestResponseCreators.withSuccess;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
+/**
+ * Phase-4 demoted sweeper: it no longer drives commits/rollbacks itself (that would race the
+ * queue) — it re-enqueues stuck transactions for the async consumer to recover.
+ */
 @SpringBootTest
 @ActiveProfiles("test")
 @TestPropertySource(properties = {
@@ -41,93 +41,57 @@ class BrokerRecoverySweepIntegrationTest {
     private TransactionRepository transactionRepository;
 
     @Autowired
-    private RestTemplate restTemplate;
-
-    private MockRestServiceServer mockServer;
+    private InMemoryRetryQueue retryQueue;
 
     @BeforeEach
     void setUp() {
-        mockServer = MockRestServiceServer.createServer(restTemplate);
         transactionRepository.deleteAll();
+        retryQueue.clear();
     }
 
     @Test
-    void sweepPendingTransaction_TriggersRollback() {
-        Transaction txn = buildTransaction(TransactionStatus.PENDING,
-                new TransactionItemSpec("TI", "TI-SKU", 2, new BigDecimal("1.50"), UUID.randomUUID()));
-
-        mockServer.expect(ExpectedCount.once(), requestTo("http://localhost:8081/api/transaction/rollback"))
-                .andRespond(withSuccess());
+    void sweep_reEnqueuesStuckTransactions() {
+        UUID pending = buildStuck(TransactionStatus.PENDING).getId();
+        UUID prepared = buildStuck(TransactionStatus.PREPARED).getId();
+        UUID partial = buildStuck(TransactionStatus.PARTIALLY_COMMITTED).getId();
 
         brokerService.sweepAndResumeStuckTransactions();
 
-        Transaction refreshed = transactionRepository.findById(txn.getId()).orElseThrow();
-        assertEquals(TransactionStatus.ROLLED_BACK, refreshed.getStatus());
-        mockServer.verify();
+        assertTrue(retryQueue.getEnqueued().containsAll(List.of(pending, prepared, partial)),
+                "all stuck transactions should be re-enqueued for async recovery");
     }
 
     @Test
-    void sweepPreparedTransaction_TriggersCommit() {
-        Transaction txn = buildTransaction(TransactionStatus.PREPARED,
-                new TransactionItemSpec("TI", "TI-SKU", 2, new BigDecimal("1.50"), UUID.randomUUID()),
-                new TransactionItemSpec("Murata", "MU-SKU", 3, new BigDecimal("2.25"), UUID.randomUUID()));
-
-        mockServer.expect(ExpectedCount.once(), requestTo("http://localhost:8081/api/transaction/commit"))
-                .andRespond(withSuccess());
-        mockServer.expect(ExpectedCount.once(), requestTo("http://localhost:8082/api/transaction/commit"))
-                .andRespond(withSuccess());
+    void sweep_ignoresRecentTransactions() {
+        Transaction recent = new Transaction();
+        recent.setCustomerName("recent");
+        recent.setStatus(TransactionStatus.PENDING);
+        // startedAt defaults to now -> within the 1-minute buffer
+        transactionRepository.save(recent);
 
         brokerService.sweepAndResumeStuckTransactions();
 
-        Transaction refreshed = transactionRepository.findById(txn.getId()).orElseThrow();
-        assertEquals(TransactionStatus.COMMITTED, refreshed.getStatus());
-        mockServer.verify();
+        assertTrue(retryQueue.getEnqueued().isEmpty(),
+                "recent transactions are within the buffer and must not be swept");
     }
 
-    @Test
-    void sweepPartiallyCommittedTransaction_TriggersCommit() {
-        // Arrange: Transaction is PARTIALLY_COMMITTED, meaning Phase 2 broke halfway.
-        Transaction txn = buildTransaction(TransactionStatus.PARTIALLY_COMMITTED,
-                new TransactionItemSpec("TI", "TI-SKU", 2, new BigDecimal("1.50"), UUID.randomUUID()),
-                new TransactionItemSpec("Murata", "MU-SKU", 3, new BigDecimal("2.25"), UUID.randomUUID()));
-
-        // The Broker will re-fire the commit to BOTH suppliers.
-        // We expect both to respond with Success (200 OK) due to Supplier idempotency.
-        mockServer.expect(ExpectedCount.once(), requestTo("http://localhost:8081/api/transaction/commit"))
-                .andRespond(withSuccess());
-        mockServer.expect(ExpectedCount.once(), requestTo("http://localhost:8082/api/transaction/commit"))
-                .andRespond(withSuccess());
-
-        // Act: Run the background sweep job
-        brokerService.sweepAndResumeStuckTransactions();
-
-        // Assert: The split-brain is healed, and the transaction is fully COMMITTED.
-        Transaction refreshed = transactionRepository.findById(txn.getId()).orElseThrow();
-        assertEquals(TransactionStatus.COMMITTED, refreshed.getStatus());
-        mockServer.verify();
-    }
-
-    private Transaction buildTransaction(TransactionStatus status, TransactionItemSpec... items) {
+    private Transaction buildStuck(TransactionStatus status) {
         Transaction txn = new Transaction();
         txn.setCustomerName("RecoveryTest");
         txn.setStatus(status);
 
-        List<TransactionItem> transactionItems = new ArrayList<>(items.length);
-        for (TransactionItemSpec spec : items) {
-            TransactionItem item = new TransactionItem();
-            item.setSupplier(spec.supplier());
-            item.setSku(spec.sku());
-            item.setQuantity(spec.quantity());
-            item.setUnitPrice(spec.unitPrice());
-            item.setReservationId(spec.reservationId());
-            transactionItems.add(item);
-        }
+        TransactionItem item = new TransactionItem();
+        item.setSupplier("TI");
+        item.setSku("TI-SKU");
+        item.setQuantity(2);
+        item.setUnitPrice(new BigDecimal("1.50"));
+        item.setReservationId(UUID.randomUUID());
 
-        txn.setItems(transactionItems);
+        List<TransactionItem> items = new ArrayList<>();
+        items.add(item);
+        txn.setItems(items);
+
         ReflectionTestUtils.setField(txn, "startedAt", Instant.now().minus(Duration.ofMinutes(2)));
         return transactionRepository.save(txn);
-    }
-
-    private record TransactionItemSpec(String supplier, String sku, int quantity, BigDecimal unitPrice, UUID reservationId) {
     }
 }
