@@ -430,10 +430,15 @@ export default function App() {
     const [checkoutForm, setCheckoutForm] = useState({ name: '', address: '', card: '', expiry: '', cvv: '' });
     const [orderResult, setOrderResult] = useState(null);
     const [orderTxId, setOrderTxId] = useState(null);
-    console.log('user:', user);
-    console.log('roles:', roles);
-    console.log('isManager:', isManager);
+    const [brokerOnline, setBrokerOnline] = useState(false);
 
+
+    useEffect(() => {
+    fetch(`${import.meta.env.VITE_BROKER_URL}/api/components`)
+        .then(res => { if (res.ok) setBrokerOnline(true); })
+        .catch(() => setBrokerOnline(false));
+    }, []);
+    
     useEffect(() => {
 	if (!isAuthenticated || !isManager) return;
 	setTxLoading(true);
@@ -648,9 +653,9 @@ export default function App() {
 		    </div>
 		    {/* Status LEDs */}
 		    <div style={{ display: 'flex', flexDirection: 'column', gap: 5, marginLeft: 8 }}>
-			<LED on={true}  color={C.phosphor} label="PWR" />
-			<LED on={true}  color={C.amber}    label="NET" />
-			<LED on={false} color={C.amberGlow} label="ERR" />
+			<LED on={true}           color={C.phosphor} label="PWR" />
+			<LED on={brokerOnline}   color={C.amber}    label="NET" />
+			<LED on={!brokerOnline}  color={C.red}      label="ERR" />
 		    </div>
 		</div>
 
