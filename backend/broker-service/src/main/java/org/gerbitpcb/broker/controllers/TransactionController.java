@@ -13,6 +13,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.List;
 import java.util.UUID;
 
 @RestController
@@ -29,12 +30,13 @@ public class TransactionController {
 
     /**
      * Synchronous checkout with async fallback (Phase 4).
-     * Persists the order, then makes ONE synchronous completion attempt (Try + Confirm)
-     *   201 COMMITTED - all suppliers reserved + committed synchronously.
-     *   202 ACCEPTED - a supplier was unreachable; the order is queued and a background
-     *       process retries for up to 15 minutes (the customer can leave). Status is RETRYING.
-     *   502 BAD_GATEWAY - a deterministic business failure (e.g. out of stock); aborted.
-     *
+     * Persists the order, then makes ONE synchronous completion attempt (Try + Confirm):
+     * <ul>
+     *   <li><b>201</b> COMMITTED — all suppliers reserved + committed synchronously.</li>
+     *   <li><b>202</b> ACCEPTED — a supplier was unreachable; the order is queued and a background
+     *       process retries for up to 15 minutes (the customer can leave). Status is RETRYING.</li>
+     *   <li><b>502</b> BAD_GATEWAY — a deterministic business failure (e.g. out of stock); aborted.</li>
+     * </ul>
      */
     @PostMapping
     public ResponseEntity<CreateTransactionResponse> create(@Valid @RequestBody CreateTransactionRequest request) {
@@ -56,6 +58,15 @@ public class TransactionController {
 
         Transaction txn = brokerService.getTransaction(id);
         return ResponseEntity.status(status).body(new CreateTransactionResponse(txn.getId(), txn.getStatus()));
+    }
+
+    @GetMapping
+    public ResponseEntity<List<TransactionResponse>> getAll() {
+        List<TransactionResponse> transactions = brokerService.getAllTransactions()
+                .stream()
+                .map(TransactionResponse::from)
+                .toList();
+        return ResponseEntity.ok(transactions);
     }
 
     @GetMapping("/{id}")

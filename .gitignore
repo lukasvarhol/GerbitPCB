@@ -1,2 +1,26 @@
-.idea/
 .env
+.env.local
+.env.production
+*.env.production
+*.env.local
+application-local.properties
+**/application-local.properties
+
+*~
+\#*\#
+target/
+*.jar
+*.war
+
+node_modules/
+dist/
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
+

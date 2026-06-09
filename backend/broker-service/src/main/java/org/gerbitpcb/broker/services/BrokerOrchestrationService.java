@@ -591,4 +591,8 @@ public class BrokerOrchestrationService {
             retryQueue.enqueue(txn.getId());
         }
     }
+
+    public List<Transaction> getAllTransactions() {
+	return transactionRepository.findAll();
+    }
 }
