@@ -426,7 +426,10 @@ export default function App() {
     const [transactions, setTransactions] = useState([]);
     const [txLoading, setTxLoading] = useState(false);
     const [selectedTx, setSelectedTx] = useState(null);
-
+    const [checkoutOpen, setCheckoutOpen] = useState(false);
+    const [checkoutForm, setCheckoutForm] = useState({ name: '', address: '', card: '', expiry: '', cvv: '' });
+    const [orderResult, setOrderResult] = useState(null);
+    const [orderTxId, setOrderTxId] = useState(null);
     console.log('user:', user);
     console.log('roles:', roles);
     console.log('isManager:', isManager);
@@ -459,23 +462,23 @@ export default function App() {
     }, []);
 
     const txTotal = (tx) =>
-    tx.items.reduce((sum, item) => sum + item.quantity * parseFloat(item.unitPrice), 0).toFixed(2);
+	  tx.items.reduce((sum, item) => sum + item.quantity * parseFloat(item.unitPrice), 0).toFixed(2);
 
-const handleTxAction = async (txId, action) => {
-    const token = await getAccessTokenSilently({ authorizationParams: { audience: 'https://api.gerbitpcb.com' } });
-    await fetch(`${import.meta.env.VITE_BROKER_URL}/api/transactions/${txId}/${action}`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}` }
-    });
-    // refresh transactions
-    setSelectedTx(null);
-    setTxLoading(true);
-    const res = await fetch(`${import.meta.env.VITE_BROKER_URL}/api/transactions`, {
-        headers: { Authorization: `Bearer ${token}` }
-    });
-    setTransactions(await res.json());
-    setTxLoading(false);
-};
+    const handleTxAction = async (txId, action) => {
+	const token = await getAccessTokenSilently({ authorizationParams: { audience: 'https://api.gerbitpcb.com' } });
+	await fetch(`${import.meta.env.VITE_BROKER_URL}/api/transactions/${txId}/${action}`, {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${token}` }
+	});
+	// refresh transactions
+	setSelectedTx(null);
+	setTxLoading(true);
+	const res = await fetch(`${import.meta.env.VITE_BROKER_URL}/api/transactions`, {
+            headers: { Authorization: `Bearer ${token}` }
+	});
+	setTransactions(await res.json());
+	setTxLoading(false);
+    };
 
     const bomStatus = (sku) => {
 	if (!(sku in componentStock)) return { label: 'UNKNOWN', color: C.inkLight };
@@ -511,21 +514,27 @@ const handleTxAction = async (txId, action) => {
     selectedComponents.forEach(c => cartLines.push({ label: `${c.name} ×${c.qty}`, price: +(c.priceEur * c.qty).toFixed(2) }));
     const total = cartLines.reduce((s, l) => s + l.price, 0);
 
-    const handleOrder = async () => {
-	if (!selectedComponents.length) { alert('Please select at least one component.'); return; }
+    const handleOrder = async (customerName) => {
 	try {
-	    const res  = await fetch(`${import.meta.env.VITE_BROKER_URL}/api/transactions`, {
+            const res = await fetch(`${import.meta.env.VITE_BROKER_URL}/api/transactions`, {
 		method: 'POST',
 		headers: { 'Content-Type': 'application/json' },
 		body: JSON.stringify({
-		    customerName: isAuthenticated ? user.email : 'Guest',
-		    items: selectedComponents.map(c => ({ supplier: c.supplier, sku: c.sku, quantity: c.qty, unitPrice: c.priceEur })),
+                    customerName: customerName,
+                    items: selectedComponents.map(c => ({ supplier: c.supplier, sku: c.sku, quantity: c.qty, unitPrice: c.priceEur })),
 		}),
-	    });
-	    const data = await res.json();
-	    if (data.status === 'COMMITTED') { alert(`Order placed! ID: ${data.transactionId}`); setSelectedComponents([]); setCartOpen(false); }
-	    else alert(`Order failed: ${data.status}`);
-	} catch { alert('Could not reach the broker.'); }
+            });
+            const data = await res.json();
+            if (data.status === 'COMMITTED') {
+		setOrderTxId(data.transactionId);
+		setOrderResult('success');
+		setSelectedComponents([]);
+            } else {
+		setOrderResult('failed');
+            }
+	} catch {
+            setOrderResult('failed');
+	}
     };
 
     const pcbSpecsContent = (
@@ -830,7 +839,7 @@ const handleTxAction = async (txId, action) => {
             <PhysicalButton onClick={() => setCartOpen(true)}>
               View cart
             </PhysicalButton>
-            <PhysicalButton primary disabled={cartLines.length === 0} onClick={handleOrder}>
+            <PhysicalButton primary disabled={cartLines.length === 0} onClick={() => setCheckoutOpen(true)}>
               Place order
             </PhysicalButton>
           </div>
@@ -859,7 +868,7 @@ const handleTxAction = async (txId, action) => {
               </div>
             </div>
             <div style={{ marginTop: 16 }}>
-              <PhysicalButton primary onClick={handleOrder} style={{ width: '100%', justifyContent: 'center', padding: '12px' }}>
+              <PhysicalButton primary disabled={cartLines.length === 0} onClick={() => setCheckoutOpen(true)}>
                 Place order
               </PhysicalButton>
             </div>
@@ -928,6 +937,121 @@ const handleTxAction = async (txId, action) => {
         </div>
     )}
 </Modal>
+<Modal
+    open={checkoutOpen}
+    onCancel={() => { setCheckoutOpen(false); setOrderResult(null); setCheckoutForm({ name: '', address: '', card: '', expiry: '', cvv: '' }); }}
+    footer={null}
+    width={520}
+    styles={{ body: { background: C.panel, padding: 24 } }}
+    style={{ top: 80 }}
+>
+    {orderResult === null && (
+        <div style={{ fontFamily: "'Share Tech Mono', monospace" }}>
+            <SilkLabel style={{ fontSize: 14, opacity: 1, color: C.inkDark, marginBottom: 20 }}>Checkout</SilkLabel>
+            
+            <div style={{ marginBottom: 14 }}>
+                <SilkLabel style={{ marginBottom: 6 }}>Full name</SilkLabel>
+                <input
+                    value={checkoutForm.name}
+                    onChange={e => setCheckoutForm({ ...checkoutForm, name: e.target.value })}
+                    style={{ width: '100%', padding: '8px 12px', background: C.panelInset, color: C.inkDark, fontFamily: "'Share Tech Mono', monospace", fontSize: 13, ...inset(2), outline: 'none', boxSizing: 'border-box' }}
+                />
+            </div>
+
+            <div style={{ marginBottom: 14 }}>
+                <SilkLabel style={{ marginBottom: 6 }}>Delivery address</SilkLabel>
+                <input
+                    value={checkoutForm.address}
+                    onChange={e => setCheckoutForm({ ...checkoutForm, address: e.target.value })}
+                    style={{ width: '100%', padding: '8px 12px', background: C.panelInset, color: C.inkDark, fontFamily: "'Share Tech Mono', monospace", fontSize: 13, ...inset(2), outline: 'none', boxSizing: 'border-box' }}
+                />
+            </div>
+
+            <div style={{ height: 1, background: C.panelShadow, margin: '16px 0', boxShadow: `0 1px 0 ${C.panelLight}` }} />
+            <SilkLabel style={{ marginBottom: 12 }}>Payment information</SilkLabel>
+
+            <div style={{ marginBottom: 14 }}>
+                <SilkLabel style={{ marginBottom: 6 }}>Card number</SilkLabel>
+                <input
+                    value={checkoutForm.card}
+                    onChange={e => setCheckoutForm({ ...checkoutForm, card: e.target.value })}
+                    placeholder="1234 5678 9012 3456"
+                    style={{ width: '100%', padding: '8px 12px', background: C.panelInset, color: C.inkDark, fontFamily: "'Share Tech Mono', monospace", fontSize: 13, ...inset(2), outline: 'none', boxSizing: 'border-box' }}
+                />
+            </div>
+
+            <div style={{ display: 'flex', gap: 12, marginBottom: 20 }}>
+                <div style={{ flex: 1 }}>
+                    <SilkLabel style={{ marginBottom: 6 }}>Expiry</SilkLabel>
+                    <input
+                        value={checkoutForm.expiry}
+                        onChange={e => setCheckoutForm({ ...checkoutForm, expiry: e.target.value })}
+                        placeholder="MM/YY"
+                        style={{ width: '100%', padding: '8px 12px', background: C.panelInset, color: C.inkDark, fontFamily: "'Share Tech Mono', monospace", fontSize: 13, ...inset(2), outline: 'none', boxSizing: 'border-box' }}
+                    />
+                </div>
+                <div style={{ flex: 1 }}>
+                    <SilkLabel style={{ marginBottom: 6 }}>CVV</SilkLabel>
+                    <input
+                        value={checkoutForm.cvv}
+                        onChange={e => setCheckoutForm({ ...checkoutForm, cvv: e.target.value })}
+                        placeholder="123"
+                        style={{ width: '100%', padding: '8px 12px', background: C.panelInset, color: C.inkDark, fontFamily: "'Share Tech Mono', monospace", fontSize: 13, ...inset(2), outline: 'none', boxSizing: 'border-box' }}
+                    />
+                </div>
+            </div>
+
+            <div style={{ ...inset(2), background: C.screen, padding: '10px 16px', marginBottom: 20 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+                    <span style={{ fontFamily: "'Share Tech Mono', monospace", fontSize: 10, color: C.phosphorDim, letterSpacing: '2px' }}>ORDER TOTAL</span>
+                    <span style={{ fontFamily: "'VT323', monospace", fontSize: 28, color: C.phosphor, textShadow: `0 0 10px ${C.phosphor}`, letterSpacing: '2px' }}>€{total.toFixed(2)}</span>
+                </div>
+            </div>
+
+            <PhysicalButton
+                primary
+                disabled={!checkoutForm.name || !checkoutForm.address || !checkoutForm.card}
+                onClick={() => handleOrder(checkoutForm.name)}
+                style={{ width: '100%', justifyContent: 'center', padding: '12px' }}
+            >
+                Confirm order
+            </PhysicalButton>
+        </div>
+    )}
+
+    {orderResult === 'success' && (
+        <div style={{ textAlign: 'center', padding: '20px 0' }}>
+            <div style={{ ...inset(2), background: C.screen, padding: '20px', marginBottom: 20 }}>
+                <div style={{ fontFamily: "'VT323', monospace", fontSize: 28, color: C.phosphor, textShadow: `0 0 10px ${C.phosphor}`, letterSpacing: '3px', marginBottom: 8 }}>
+                    ORDER COMMITTED
+                </div>
+                <div style={{ fontFamily: "'Share Tech Mono', monospace", fontSize: 10, color: C.phosphorDim, letterSpacing: '2px' }}>
+                    TX: {orderTxId}
+                </div>
+            </div>
+            <PhysicalButton onClick={() => { setCheckoutOpen(false); setOrderResult(null); setCartOpen(false); }} style={{ width: '100%', justifyContent: 'center' }}>
+                Close
+            </PhysicalButton>
+        </div>
+    )}
+
+    {orderResult === 'failed' && (
+        <div style={{ textAlign: 'center', padding: '20px 0' }}>
+            <div style={{ ...inset(2), background: C.screen, padding: '20px', marginBottom: 20 }}>
+                <div style={{ fontFamily: "'VT323', monospace", fontSize: 28, color: C.red, textShadow: `0 0 10px ${C.red}`, letterSpacing: '3px', marginBottom: 8 }}>
+                    ORDER FAILED
+                </div>
+                <div style={{ fontFamily: "'Share Tech Mono', monospace", fontSize: 10, color: C.inkLight, letterSpacing: '2px' }}>
+                    SUPPLIER UNAVAILABLE OR OUT OF STOCK
+                </div>
+            </div>
+            <PhysicalButton onClick={() => setOrderResult(null)} style={{ width: '100%', justifyContent: 'center' }}>
+                Try again
+            </PhysicalButton>
+        </div>
+    )}
+</Modal>
+
     </ConfigProvider>
   );
 }
