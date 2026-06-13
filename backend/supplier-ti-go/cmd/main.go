@@ -18,7 +18,7 @@ import (
 func main() {
 	cfg := config.LoadConfig()
 
-	dsn := fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=disable",
+	dsn := fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=require",
 		cfg.DbHost, cfg.DbPort, cfg.DbUser, cfg.DbPassword, cfg.DbName)
 	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
 	if err != nil {
@@ -26,7 +26,7 @@ func main() {
 	}
 
 	repo := repository.NewRepository(db)
-	serv := service.NewService(repo, cfg.BrokerWebhookUrl)
+	serv := service.NewService(repo, cfg.BrokerWebhookUrl, cfg.ReservationTTL)
 	handler := handlers.NewHandler(serv)
 
 	router := gin.Default()

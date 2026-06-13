@@ -1,5 +1,10 @@
 package config
-import "os"
+
+import (
+	"os"
+	"strconv"
+	"time"
+)
 
 type Config struct {
 	DbHost string
@@ -11,6 +16,7 @@ type Config struct {
 	Auth0Audience string
 	Port string
 	BrokerWebhookUrl string
+	ReservationTTL time.Duration
 }
 
 func LoadConfig() Config {
@@ -29,6 +35,13 @@ func LoadConfig() Config {
 	}
 	config.Port = ":" + port;
 	config.BrokerWebhookUrl = os.Getenv("BROKER_WEBHOOK_URL")
+
+	ttl := os.Getenv("RESERVATION_TTL_MINUTES")
+	if ttl == "" {
+		ttl = "20"
+	}
+	mins, _ := strconv.Atoi(ttl)
+	config.ReservationTTL = time.Duration(mins) * time.Minute
 
 	return config
 }

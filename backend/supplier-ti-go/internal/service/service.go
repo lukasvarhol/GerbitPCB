@@ -11,10 +11,11 @@ import (
 type Service struct {
 	repository *repository.Repository
 	webhookUrl string
+	reservationTTL time.Duration
 }
 
-func NewService(repository *repository.Repository, webhookUrl string) *Service {
-	return &Service{repository: repository, webhookUrl: webhookUrl}
+func NewService(repository *repository.Repository, webhookUrl string, reservationTTL time.Duration) *Service {
+	return &Service{repository: repository, webhookUrl: webhookUrl, reservationTTL: reservationTTL}
 }
 
 func (s *Service) GetAllComponents() ([]models.Component, error) {
@@ -122,7 +123,7 @@ func (s *Service) Rollback (reservationId uuid.UUID) error {
 }
 
 func (s *Service) CleanupStaleReservations() error {
-	cutoff := time.Now().Add(-5 * time.Minute)
+	cutoff := time.Now().Add(-s.reservationTTL)
 	reservations, err := s.repository.FindStaleReservations(cutoff)
 	if err != nil {
 		return err
