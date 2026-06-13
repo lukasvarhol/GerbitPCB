@@ -456,14 +456,20 @@ export default function App() {
     }, [isAuthenticated, isManager]);
 
     useEffect(() => {
-	fetch(`${import.meta.env.VITE_BROKER_URL}/api/components`) 
-	    .then(res => res.json())
-	    .then(data => {
-		const map = {};
-		data.forEach(c => { map[c.sku] = c.availableStock; });
-		setComponentStock(map);
-	    })
-	    .catch(() => {});
+	const fetchStock = () => {
+            fetch(`${import.meta.env.VITE_BROKER_URL}/api/components`)
+		.then(res => res.json())
+		.then(data => {
+                    const map = {};
+                    data.forEach(c => { map[c.sku] = c.availableStock; });
+                    setComponentStock(map);
+		})
+		.catch(() => {});
+	};
+	
+	fetchStock();
+	const interval = setInterval(fetchStock, 15000);
+	return () => clearInterval(interval);
     }, []);
 
     const txTotal = (tx) =>
@@ -533,6 +539,10 @@ export default function App() {
             if (data.status === 'COMMITTED') {
 		setOrderTxId(data.transactionId);
 		setOrderResult('success');
+		setSelectedComponents([]);
+	    } else if (data.status === 'PARTIALLY_COMMITTED') {
+		setOrderTxId(data.transactionID);
+		setOrderResult('pending');
 		setSelectedComponents([]);
             } else {
 		setOrderResult('failed');
@@ -844,9 +854,16 @@ export default function App() {
             <PhysicalButton onClick={() => setCartOpen(true)}>
               View cart
             </PhysicalButton>
-            <PhysicalButton primary disabled={cartLines.length === 0} onClick={() => setCheckoutOpen(true)}>
-              Place order
-            </PhysicalButton>
+<PhysicalButton 
+    primary 
+    disabled={cartLines.length === 0} 
+    onClick={() => {
+        if (!isAuthenticated) { loginWithRedirect(); return; }
+        setCheckoutOpen(true);
+    }}
+>
+    Place order
+</PhysicalButton>
           </div>
         </div>
       </div>
@@ -873,9 +890,16 @@ export default function App() {
               </div>
             </div>
             <div style={{ marginTop: 16 }}>
-              <PhysicalButton primary disabled={cartLines.length === 0} onClick={() => setCheckoutOpen(true)}>
-                Place order
-              </PhysicalButton>
+<PhysicalButton 
+    primary 
+    disabled={cartLines.length === 0} 
+    onClick={() => {
+        if (!isAuthenticated) { loginWithRedirect(); return; }
+        setCheckoutOpen(true);
+    }}
+>
+    Place order
+</PhysicalButton>
             </div>
           </>
         )}
@@ -1039,6 +1063,26 @@ export default function App() {
             </PhysicalButton>
         </div>
     )}
+
+{orderResult === 'pending' && (
+    <div style={{ textAlign: 'center', padding: '20px 0' }}>
+        <div style={{ ...inset(2), background: C.screen, padding: '20px', marginBottom: 20 }}>
+            <div style={{ fontFamily: "'VT323', monospace", fontSize: 28, color: C.amber, textShadow: `0 0 10px ${C.amber}`, letterSpacing: '3px', marginBottom: 8 }}>
+                ORDER PROCESSING
+            </div>
+            <div style={{ fontFamily: "'Share Tech Mono', monospace", fontSize: 10, color: C.amberDim, letterSpacing: '2px', marginBottom: 8 }}>
+                TX: {orderTxId}
+            </div>
+            <div style={{ fontFamily: "'Share Tech Mono', monospace", fontSize: 10, color: C.inkLight, letterSpacing: '1px' }}>
+                YOUR ORDER IS BEING FINALIZED AUTOMATICALLY.
+                THIS MAY TAKE A FEW MINUTES.
+            </div>
+        </div>
+        <PhysicalButton onClick={() => { setCheckoutOpen(false); setOrderResult(null); setCartOpen(false); }} style={{ width: '100%', justifyContent: 'center' }}>
+            Close
+        </PhysicalButton>
+    </div>
+)}
 
     {orderResult === 'failed' && (
         <div style={{ textAlign: 'center', padding: '20px 0' }}>
