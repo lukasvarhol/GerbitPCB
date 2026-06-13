@@ -30,31 +30,43 @@ export default function ComponentList({ onQuantitiesChange }) {
     const [quantities, setQuantities] = useState({});
 
     useEffect(() => {
-	fetch(`${import.meta.env.VITE_BROKER_URL}/api/components`)
-	    .then(res => {
-		if (!res.ok) throw new Error('Backend not available');
-		return res.json();
-	    })
-	    .then(data => {
-		const mapped = data.map(c => ({
-		    id: c.id,
-		    sku: c.sku,
-		    name: c.name,
-		    supplier: c.supplier,
-		    manufacturer: c.supplier,
-		    type: 'Component',
-		    priceEur: c.price,
-		    stock: c.availableStock,
-		}));
-		setComponents(mapped);
-		setQuantities(Object.fromEntries(mapped.map(c => [c.id, 0])));
-	    })
-	    .catch(() => {
-		// Fall back to mock data while backend is not ready
-		setComponents(MOCK_COMPONENTS);
-		setQuantities(Object.fromEntries(MOCK_COMPONENTS.map(c => [c.id, 0])));
-	    })
-	    .finally(() => setLoading(false));
+	const fetchComponents = () => {
+            fetch(`${import.meta.env.VITE_BROKER_URL}/api/components`)
+		.then(res => {
+                    if (!res.ok) throw new Error('Backend not available');
+                    return res.json();
+		})
+		.then(data => {
+                    const mapped = data.map(c => ({
+			id: c.id,
+			sku: c.sku,
+			name: c.name,
+			supplier: c.supplier,
+			manufacturer: c.supplier,
+			type: 'Component',
+			priceEur: c.price,
+			stock: c.availableStock,
+                    }));
+                    setComponents(mapped);
+                    setQuantities(prev => {
+			// preserve existing quantities, only add new components at 0
+			const updated = { ...prev };
+			mapped.forEach(c => {
+                            if (!(c.id in updated)) updated[c.id] = 0;
+			});
+			return updated;
+                    });
+		})
+		.catch(() => {
+                    setComponents(MOCK_COMPONENTS);
+                    setQuantities(Object.fromEntries(MOCK_COMPONENTS.map(c => [c.id, 0])));
+		})
+		.finally(() => setLoading(false));
+	};
+
+	fetchComponents();
+	const interval = setInterval(fetchComponents, 15000);
+	return () => clearInterval(interval);
     }, []);
 
     const updateQty = (id, val) => {
