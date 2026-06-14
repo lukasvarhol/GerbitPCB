@@ -12,6 +12,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -24,6 +25,14 @@ public class ComponentService {
     private final ComponentRepository componentRepository;
     private final ReservationRepository reservationRepository;
     private final BrokerNotificationService brokerNotificationService;
+
+    /**
+     * How long a RESERVED reservation may live before the sweeper releases it.
+     * MUST be >= the broker's async retry window (Phase 4), otherwise this self-defense
+     * sweep would release stock from a broker that is still legitimately retrying.
+     */
+    @Value("${supplier.reservation.ttl:PT20M}")
+    private Duration reservationTtl = Duration.ofMinutes(20);
 
     public ComponentService(ComponentRepository componentRepository, ReservationRepository reservationRepository, BrokerNotificationService brokerNotificationService) {
         this.componentRepository = componentRepository;
@@ -157,13 +166,14 @@ public class ComponentService {
      * or fails after completing Phase 1 but before it sends Phase 2, those items would be stuck in a RESERVED status forever.
      *
      * Solution:
-     * This method runs every 5 minutes to clean up any reservations that have been in the RESERVED state for more than 5 minutes
+     * This method runs every 5 minutes to clean up any reservations that have been in the
+     * RESERVED state for longer than the configured TTL (default 20 minutes).
      */
 
     @Scheduled(fixedRate = 300000)
     @Transactional
     public void cleanupStaleReservations() {
-        Instant cutoff = Instant.now().minus(Duration.ofMinutes(5));
+        Instant cutoff = Instant.now().minus(reservationTtl);
         List<Reservation> staleReservations = reservationRepository
                 .findByStatusAndCreatedAtBefore(ReservationStatus.RESERVED, cutoff);
 

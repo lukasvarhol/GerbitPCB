@@ -8,19 +8,24 @@ import org.gerbitpcb.broker.domain.TransactionStatus;
 import org.gerbitpcb.broker.dto.CreateTransactionRequest;
 import org.gerbitpcb.broker.exceptions.InvalidTransactionStateException;
 import org.gerbitpcb.broker.exceptions.TransactionNotFoundException;
+import org.gerbitpcb.broker.messaging.RetryQueue;
 import org.gerbitpcb.broker.repository.TransactionRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageConversionException;
 import org.springframework.stereotype.Service;
+import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestClientResponseException;
 import org.springframework.web.client.RestTemplate;
 
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.*;
@@ -43,12 +48,59 @@ public class BrokerOrchestrationService {
     private final RestTemplate restTemplate;
     private final SupplierConfiguration supplierConfiguration;
 
+    private Clock clock = Clock.systemUTC();
+
+    @Value("${app.retry.window:PT15M}")
+    private Duration retryWindow = Duration.ofMinutes(15);
+
+    private RetryQueue retryQueue;
+
     public BrokerOrchestrationService(TransactionRepository transactionRepository,
                                       RestTemplate restTemplate,
                                       SupplierConfiguration supplierConfiguration) {
         this.transactionRepository = transactionRepository;
         this.restTemplate = restTemplate;
         this.supplierConfiguration = supplierConfiguration;
+    }
+
+    @Autowired(required = false)
+    public void setClock(Clock clock) {
+        if (clock != null) {
+            this.clock = clock;
+        }
+    }
+
+    @Autowired(required = false)
+    public void setRetryQueue(RetryQueue retryQueue) {
+        this.retryQueue = retryQueue;
+    }
+
+    /**
+     * Persists a new transaction in PENDING with its 15-minute deadline, WITHOUT contacting any
+     * supplier. The caller then drives it with {@link #attemptCompletion(UUID)}.
+     */
+    @Transactional
+    public Transaction createPending(CreateTransactionRequest request) {
+        if (request == null || request.items() == null || request.items().isEmpty()) {
+            throw new IllegalArgumentException("Transaction request must include at least one item");
+        }
+        Transaction txn = new Transaction();
+        txn.setCustomerName(request.customerName());
+        txn.setStatus(TransactionStatus.PENDING);
+        txn.setDeadlineAt(Instant.now(clock).plus(retryWindow));
+
+        List<TransactionItem> items = new ArrayList<>();
+        for (CreateTransactionRequest.Item it : request.items()) {
+            TransactionItem ti = new TransactionItem();
+            ti.setSupplier(it.supplier());
+            ti.setSku(it.sku());
+            ti.setQuantity(it.quantity());
+            ti.setUnitPrice(it.unitPrice());
+            ti.setTransaction(txn);
+            items.add(ti);
+        }
+        txn.setItems(items);
+        return transactionRepository.save(txn);
     }
 
     /**
@@ -68,6 +120,7 @@ public class BrokerOrchestrationService {
         Transaction txn = new Transaction();
         txn.setCustomerName(request.customerName());
         txn.setStatus(TransactionStatus.PENDING);
+        txn.setDeadlineAt(Instant.now(clock).plus(retryWindow));
 
         List<TransactionItem> items = new ArrayList<>();
         for (CreateTransactionRequest.Item it : request.items()) {
@@ -324,10 +377,186 @@ public class BrokerOrchestrationService {
         auditEntry.setPhase(phase);
         auditEntry.setSupplier(supplier);
         auditEntry.setStatus(status);
-        auditEntry.setTimestamp(Instant.now());
+        auditEntry.setTimestamp(Instant.now(clock));
         auditEntry.setReservationId(reservationId);
         auditEntry.setFailureReason(failureReason);
         return auditEntry;
+    }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // Phase 4 (Level 2): idempotent async-retry primitives.
+    // attemptCompletion() reconciles the CURRENT state of a transaction — reserve
+    // any not-yet-reserved item (Try), then commit every reserved item (Confirm) —
+    // so it is safe to re-run from the synchronous checkout, the async retry
+    // consumer, or the recovery sweeper. abort() is the terminal global rollback
+    // (saga compensation) used when the retry deadline is hit.
+    // ──────────────────────────────────────────────────────────────────────────
+
+    public enum CompletionResult { COMPLETED, RETRYABLE, TERMINAL_FAILED }
+
+    @Transactional
+    public CompletionResult attemptCompletion(UUID transactionId) {
+        Transaction txn = transactionRepository.findById(transactionId)
+                .orElseThrow(() -> new TransactionNotFoundException("Transaction not found: " + transactionId));
+        txn.setAttemptCount(txn.getAttemptCount() + 1);
+
+        List<TransactionItem> itemsSnapshot = new ArrayList<>(txn.getItems());
+        int step = txn.getAuditTrail().size();
+
+        // Phase 1 (Try): reserve any item that is not yet reserved.
+        for (TransactionItem it : itemsSnapshot) {
+            if (it.getReservationId() != null) {
+                continue;
+            }
+            step++;
+            try {
+                UUID rid = reserveOne(it);
+                it.setReservationId(rid);
+                txn.addAudit(createAudit(step, PHASE_PREPARE, it.getSupplier(), STATUS_SUCCESS, rid, null));
+                transactionRepository.save(txn);
+            } catch (Exception ex) {
+                txn.addAudit(createAudit(step, PHASE_PREPARE, it.getSupplier(), STATUS_FAILED, null, truncate(failureReason(ex))));
+                if (isRetryable(ex)) {
+                    txn.setStatus(TransactionStatus.RETRYING);
+                    transactionRepository.save(txn);
+                    return CompletionResult.RETRYABLE;
+                }
+                transactionRepository.save(txn);
+                return CompletionResult.TERMINAL_FAILED;
+            }
+        }
+
+        txn.setStatus(TransactionStatus.PREPARED);
+        transactionRepository.save(txn);
+
+        // Phase 2 (Confirm): commit every reserved item (supplier commit is idempotent).
+        for (TransactionItem it : itemsSnapshot) {
+            if (it.getReservationId() == null) {
+                continue;
+            }
+            step++;
+            try {
+                commitOne(it);
+                txn.addAudit(createAudit(step, PHASE_COMMIT, it.getSupplier(), STATUS_SUCCESS, it.getReservationId(), null));
+                transactionRepository.save(txn);
+            } catch (RestClientResponseException ex) {
+                int statusCode = ex.getStatusCode().value();
+                if (statusCode == 404 || statusCode == 409) {
+                    // The supplier's reservation already expired (lost race) — caller aborts + compensates.
+                    txn.addAudit(createAudit(step, PHASE_COMMIT, it.getSupplier(), STATUS_FAILED, it.getReservationId(),
+                            "EXPIRED_RACE_CONDITION: " + statusCode));
+                    txn.setStatus(TransactionStatus.PARTIALLY_COMMITTED);
+                    transactionRepository.save(txn);
+                    return CompletionResult.TERMINAL_FAILED;
+                }
+                txn.addAudit(createAudit(step, PHASE_COMMIT, it.getSupplier(), STATUS_FAILED, it.getReservationId(),
+                        "COMMIT_FAILED: " + statusCode));
+                txn.setStatus(TransactionStatus.PARTIALLY_COMMITTED);
+                transactionRepository.save(txn);
+                return isRetryable(ex) ? CompletionResult.RETRYABLE : CompletionResult.TERMINAL_FAILED;
+            } catch (Exception ex) {
+                txn.addAudit(createAudit(step, PHASE_COMMIT, it.getSupplier(), STATUS_FAILED, it.getReservationId(),
+                        truncate(failureReason(ex))));
+                txn.setStatus(TransactionStatus.PARTIALLY_COMMITTED);
+                transactionRepository.save(txn);
+                return isRetryable(ex) ? CompletionResult.RETRYABLE : CompletionResult.TERMINAL_FAILED;
+            }
+        }
+
+        for (TransactionItem it : txn.getItems()) {
+            it.setReservationId(null);
+        }
+        txn.setStatus(TransactionStatus.COMMITTED);
+        transactionRepository.save(txn);
+        return CompletionResult.COMPLETED;
+    }
+
+    /**
+     * Terminal global rollback: release every reservation (saga-compensating any that already
+     * committed — supplier rollback is idempotent and refunds committed stock) and mark the
+     * transaction FAILED. Used when the retry deadline is hit, or on an unrecoverable failure.
+     */
+    @Transactional
+    public Transaction abort(UUID transactionId) {
+        Transaction txn = transactionRepository.findById(transactionId)
+                .orElseThrow(() -> new TransactionNotFoundException("Transaction not found: " + transactionId));
+
+        int step = txn.getAuditTrail().size();
+        for (TransactionItem it : new ArrayList<>(txn.getItems())) {
+            if (it.getReservationId() == null) {
+                continue;
+            }
+            step++;
+            try {
+                rollbackOne(it);
+                txn.addAudit(createAudit(step, PHASE_ROLLBACK, it.getSupplier(), STATUS_SUCCESS, it.getReservationId(), null));
+                it.setReservationId(null);
+            } catch (Exception ex) {
+                txn.addAudit(createAudit(step, PHASE_ROLLBACK, it.getSupplier(), STATUS_FAILED, it.getReservationId(), "ROLLBACK_FAILED"));
+            }
+            transactionRepository.save(txn);
+        }
+
+        txn.setStatus(TransactionStatus.FAILED);
+        return transactionRepository.save(txn);
+    }
+
+    private UUID reserveOne(TransactionItem it) {
+        String url = supplierConfiguration.getSupplierUrl(it.getSupplier()) + "/api/transaction/reserve";
+        Map<String, Object> req = Map.of("sku", it.getSku(), "quantity", it.getQuantity());
+        ResponseEntity<Map> resp = restTemplate.postForEntity(url, req, Map.class);
+        Map body = resp.getBody();
+        Object reservationId = body == null ? null : body.get("reservationId");
+        if (reservationId == null) {
+            throw new IllegalArgumentException("NO_RESERVATION_ID");
+        }
+        try {
+            return UUID.fromString(reservationId.toString());
+        } catch (IllegalArgumentException ex) {
+            throw new IllegalArgumentException("INVALID_RESERVATION_ID");
+        }
+    }
+
+    private void commitOne(TransactionItem it) {
+        String url = supplierConfiguration.getSupplierUrl(it.getSupplier()) + "/api/transaction/commit";
+        restTemplate.postForEntity(url, Map.of("reservationId", it.getReservationId().toString()), Void.class);
+    }
+
+    private void rollbackOne(TransactionItem it) {
+        String url = supplierConfiguration.getSupplierUrl(it.getSupplier()) + "/api/transaction/rollback";
+        restTemplate.postForEntity(url, Map.of("reservationId", it.getReservationId().toString()), Void.class);
+    }
+
+    /**
+     * Classifies a failed supplier call: transient/transport failures and 5xx are retryable;
+     * deterministic business failures (4xx, out-of-stock, malformed body, bad reservation id) are terminal.
+     */
+    private boolean isRetryable(Throwable ex) {
+        if (ex instanceof RestClientResponseException rcre) {
+            return rcre.getStatusCode().is5xxServerError();
+        }
+        if (ex instanceof HttpMessageConversionException) {
+            return false;
+        }
+        if (ex instanceof IllegalArgumentException) {
+            return false;
+        }
+        if (ex instanceof ResourceAccessException) {
+            return true;
+        }
+        return ex instanceof RestClientException;
+    }
+
+    private String failureReason(Throwable ex) {
+        String message = ex.getMessage();
+        if (ex instanceof HttpMessageConversionException || ex.getCause() instanceof HttpMessageConversionException) {
+            return "MALFORMED_RESPONSE: " + message;
+        }
+        return message;
+    }
+
+    private String truncate(String value) {
+        return (value != null && value.length() > 250) ? value.substring(0, 250) : value;
     }
 
     /**
@@ -336,32 +565,30 @@ public class BrokerOrchestrationService {
      * <p>
      * <b>Usage:</b> Automatically triggered by Spring Boot every 60 seconds (@Scheduled).
      */
+    /**
+     * Phase-4 recovery janitor (demoted): the queue + async consumer now own completion, so the
+     * sweeper merely re-enqueues any non-terminal transaction stuck past the 1-minute buffer
+     * (covering a broker crash between Phase 1 and the enqueue). The consumer then re-drives
+     * {@link #attemptCompletion}, or aborts once the deadline passes. It reads only id/status, so
+     * it never touches lazy collections outside a session. No-op when no RetryQueue is configured.
+     */
     @Scheduled(fixedRate = 60000)
     public void sweepAndResumeStuckTransactions() {
-        // Buffer: Only sweep transactions older than 1 minute to avoid interfering with active requests
-        Instant cutoff = Instant.now().minus(Duration.ofMinutes(1));
+        if (retryQueue == null) {
+            return;
+        }
+        Instant cutoff = Instant.now(clock).minus(Duration.ofMinutes(1));
 
         List<TransactionStatus> stuckStatuses = List.of(
-                TransactionStatus.PENDING,             // Crashed during Phase 1
-                TransactionStatus.PREPARED,            // Crashed before Phase 2 started
-                TransactionStatus.PARTIALLY_COMMITTED  // Crashed halfway through Phase 2
+                TransactionStatus.PENDING,
+                TransactionStatus.PREPARED,
+                TransactionStatus.RETRYING,
+                TransactionStatus.PARTIALLY_COMMITTED
         );
 
-        List<Transaction> stuckTransactions = transactionRepository.findByStatusInAndStartedAtBefore(stuckStatuses, cutoff);
-
-        for (Transaction txn : stuckTransactions) {
-            log.info("Recovery Job: Sweeping stuck transaction {} in state {}", txn.getId(), txn.getStatus());
-            try {
-                if (txn.getStatus() == TransactionStatus.PENDING) {
-                    // Abort incomplete Phase 1 transactions
-                    rollbackTransaction(txn.getId());
-                } else if (txn.getStatus() == TransactionStatus.PREPARED || txn.getStatus() == TransactionStatus.PARTIALLY_COMMITTED) {
-                    // Resume Phase 2 transactions (relies on Supplier idempotency for duplicate requests)
-                    commitTransaction(txn.getId());
-                }
-            } catch (Exception e) {
-                log.error("Recovery Job: Failed to recover transaction {}", txn.getId(), e);
-            }
+        for (Transaction txn : transactionRepository.findByStatusInAndStartedAtBefore(stuckStatuses, cutoff)) {
+            log.info("Sweeper: re-enqueueing stuck transaction {} in state {}", txn.getId(), txn.getStatus());
+            retryQueue.enqueue(txn.getId());
         }
     }
 
